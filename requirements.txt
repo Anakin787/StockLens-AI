@@ -1,0 +1,8 @@
+pykiwoom
+notion-client
+pyyaml
+beautifulsoup4
+requests
+feedparser
+PyQt5
+pandas

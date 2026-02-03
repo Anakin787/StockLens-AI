@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# Configuration (contains secrets)
+config.yaml
+
+# IDE
+.vscode/
+.idea/
+
+# Distribution / Packaging
+dist/
+build/
+*.egg-info/
