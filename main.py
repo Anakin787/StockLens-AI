@@ -5,6 +5,7 @@ from src.portfolio_manager import PortfolioManager
 # from src.kiwoom import KiwoomManager # Kiwoom paused for now
 from src.notion import NotionReporter
 from src.news import NewsFetcher
+from src.analyst import Analyst
 
 def load_config():
     config_path = "config.yaml"
@@ -33,14 +34,19 @@ def main():
     news_data = news_fetcher.fetch_daily_news()
     print(f"Fetched {len(news_data.get('general', []))} general news items.")
     
-    # 4. Report to Notion
+    # 4. AI Analysis
+    print(">>> AI Analyst is thinking...")
+    analyst = Analyst(config)
+    ai_comment = analyst.analyze_portfolio(assets, news_data)
+    
+    # 5. Report to Notion
     print(">>> Reporting to Notion...")
-    if config['notion']['token'] == "secret_YOUR_NOTION_TOKEN_HERE":
+    if 'notion' not in config or config['notion']['token'] == "secret_YOUR_NOTION_TOKEN_HERE":
         print("ERROR: Please set your valid Notion Token in config.yaml")
         return
 
     reporter = NotionReporter(config)
-    reporter.create_report(assets, news_data)
+    reporter.create_report(assets, news_data, ai_comment)
     
     print(">>> Done.")
 

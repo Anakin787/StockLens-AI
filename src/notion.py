@@ -16,12 +16,14 @@ class NotionReporter:
         # Disabled dynamic resolution to rely on user-provided names
         pass
 
-    def create_report(self, asset_data, news_data):
+    def create_report(self, asset_data, news_data, ai_comment=None):
         """
         Creates a new page in the Notion database with the given data.
         """
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        title = f"{self.title_prefix} - {date_str}"
+        # Use ISO format to include time. Notion handles ISO 8601 strings.
+        # truncating microseconds for cleaner look if desired, or just standard isoformat
+        date_str = datetime.now().replace(microsecond=0).isoformat()
+        title = f"{self.title_prefix} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         children_blocks = []
 
@@ -51,15 +53,24 @@ class NotionReporter:
         else:
             children_blocks.append(self._create_paragraph_block("No asset data available (Mock or Error)."))
 
-        # 3. News Header
+        # 3. AI Analysis
+        if ai_comment:
+            children_blocks.append(self._create_heading_block("🤖 AI Analysis"))
+            # Split by lines to avoid block size limits if necessary, though paragraph can hold a lot.
+            # Truncate if insanely long, but Gemini output should be reasonable.
+            if len(ai_comment) > 2000:
+                ai_comment = ai_comment[:1997] + "..."
+            children_blocks.append(self._create_paragraph_block(ai_comment))
+
+        # 4. News Header
         children_blocks.append(self._create_heading_block("📰 Economic News"))
 
-        # 4. General News
+        # 5. General News
         children_blocks.append(self._create_subheading_block("General Economy"))
         for item in news_data.get('general', []):
             children_blocks.append(self._create_bullet_block(item['title'], item['link']))
 
-        # 5. Keyword News
+        # 6. Keyword News
         for keyword, items in news_data.get('keywords', {}).items():
             if items:
                 children_blocks.append(self._create_subheading_block(f"News: {keyword}"))

@@ -4,3 +4,4 @@ notion-client
 requests
 beautifulsoup4
 feedparser
+google-generativeai
