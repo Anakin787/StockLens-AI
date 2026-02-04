@@ -1,65 +1,79 @@
-# Financial Reporter Project
+# StockLens-AI (Financial Reporter)
 
-This project automates the creation of a daily financial report using **Kiwoom Open API** (for asset data) and **Google News RSS** (for economic news), publishing the result to a **Notion Database**.
+**StockLens-AI**는 사용자의 주식 포트폴리오와 관련 경제 뉴스를 자동으로 수집하여 **Notion 리포트**를 생성해주는 자동화 도구입니다.
 
-## Project Structure
+초기 기획은 **Kiwoom OpenAPI**를 통해 모든 자산 데이터를 자동으로 동기화하는 것이었으나, 기술적 제약(해외주식 API 미지원 등)으로 인해 **하이브리드 방식**으로 전환하였습니다.
+
+## 🚀 주요 변경 사항 및 특징 (Architecture Shift)
+
+### 이전 계획 (Deprecated)
+- **Kiwoom Open API 직접 연결**: 사용자의 계좌 정보를 직접 읽어오는 방식.
+- **문제점**:
+    - Kiwoom OpenAPI(국내)는 미국 주식 조회를 지원하지 않음.
+    - 해외 주식용 별도 모듈(OpenAPI W) 설치 필요 및 복잡한 인증 과정.
+    - 32-bit Python 환경 강제 (최신 개발 환경과 호환성 부족).
+
+### 현재 방식 (Current Architecture)
+- **YFinance + 수동 수량 관리**:
+    - **보유 수량(Qty)**: `config.yaml` 파일에 한 번만 입력.
+    - **가격 및 환율(Price & Rate)**: `yfinance`를 통해 실시간 업데이트.
+    - **장점**: 증권사 서버 점검 시간과 무관하게 언제든 조회 가능하며, 미국/한국 주식을 통합 관리할 수 있음. Python 64-bit 최신 환경 지원.
+
+---
+
+## 📂 프로젝트 구조 (Project Structure)
 
 ```text
-financial_reporter/
-├── config.yaml          # [IMPORTANT] Configuration file for API Keys
-├── main.py              # Main entry point script
-├── requirements.txt     # Python dependencies
+StockLens-AI/
+├── config.yaml          # [필수] 포트폴리오(종목/수량) 및 Notion 토큰 설정
+├── main.py              # 메인 실행 파일
+├── requirements.txt     # 필요한 라이브러리 목록
+├── ISSUE_Kiwoom_Global_Limit.md # 기술적 전환 배경 상세 문서
 └── src/
-    ├── kiwoom.py        # Kiwoom Open API Wrapper (Mock Mode supported)
-    ├── notion.py        # Notion API Client
-    └── news.py          # News Fetcher (Google News RSS)
+    ├── portfolio_manager.py # YFinance 기반 자산 가치 계산 모듈
+    ├── notion.py            # Notion API 리포트 생성기
+    └── news.py              # 구글 뉴스(RSS) 수집기
 ```
 
-## Setup & Usage
+## 🛠️ 설치 및 실행 (Setup & Usage)
 
-### 1. Prerequisites
-- **Windows OS**: Required for Kiwoom Open API.
-- **Python 32-bit**: Required for `pykiwoom`/`OCX` interaction.
-    - Recommended: Python 3.8 ~ 3.11 (32-bit version).
-- **Kiwoom Open API+**: Must be installed and running (or capable of auto-login).
+### 1. 환경 설정
+Python 3.10 이상 (64-bit 권장)이 필요합니다.
 
-### 2. Installation
+```bash
+# 가상환경 생성 (선택 사항)
+python -m venv .venv
+.venv\Scripts\activate
 
-1.  Create a virtual environment (optional but recommended):
-    ```bash
-    python -m venv venv
-    venv\Scripts\activate
+# 의존성 설치
+pip install -r requirements.txt
+```
+
+### 2. 설정 파일 수정 (`config.yaml`)
+`config.yaml` 파일을 열어 다음 두 가지를 설정하세요.
+
+1.  **Notion 설정**: API 토큰과 데이터베이스 ID 입력.
+2.  **포트폴리오 입력**:
+    ```yaml
+    portfolio:
+      stocks:
+        - symbol: "AAPL"    # 종목 코드 (미국 주식 티커)
+          qty: 10           # 보유 수량
+          avg_price: 180.0  # 평단가 (달러)
+          avg_exchange_rate: 1300.0 # 매수 당시 환율 (선택 사항)
+        
+        - symbol: "005930.KS" # 한국 주식은 뒤에 .KS(코스피) 붙임
+          qty: 20
+          avg_price: 70000
     ```
-2.  Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
 
-### 3. Configuration (`config.yaml`)
-
-You **must** edit `config.yaml` before running the program.
-
--   **Kiwoom**:
-    -   `mock`: Set to `true` to test without connecting to Kiwoom (uses fake data). Set to `false` for real trading.
--   **Notion**:
-    -   `token`: Your Notion Integration Internal Integration Token.
-    -   `database_id`: The ID of the database where reports will be added.
-    -   *Note*: Ensure your Integration is invited to the specific Notion Database page.
--   **News**:
-    -   `keywords`: Add any stocks or economic terms you want to track.
-
-### 4. Running
-
+### 3. 실행
 ```bash
 python main.py
 ```
+실행이 완료되면 Notion 페이지에 깔끔한 리포트가 생성됩니다.
 
-## extending the functionalities
+---
 
-### Customizing Kiwoom Data (`src/kiwoom.py`)
-Currently, `get_assets()` returns a simplified dict. To fetch real stock holdings:
-1.  Uncomment the TR request lines (e.g., `opw00018`).
-2.  Implement the parsing logic to convert the DataFrame return into the dictionary format expected by `main.py`.
-
-### Customizing the Report (`src/notion.py`)
-Modify `create_report()` to change the layout. You can add more blocks like `table`, `image`, or `quote` by reviewing the [Notion API Documentation](https://developers.notion.com/reference/block).
+## 📝 참고 문서
+기술적 전환에 대한 자세한 배경은 [ISSUE_Kiwoom_Global_Limit.md](./ISSUE_Kiwoom_Global_Limit.md) 파일을 참고하세요.

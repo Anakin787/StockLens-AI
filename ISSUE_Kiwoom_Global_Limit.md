@@ -1,26 +1,27 @@
-# Issue Report: Challenges with Kiwoom OpenAPI for Global Stocks
+# 이슈 보고서: 키움 OpenAPI 해외주식 연동의 한계와 해결책
 
-## Summary
-The goal was to automate the retrieval of US stock portfolio data using Kiwoom Securities' Open API. However, due to significant technical limitations and system fragmentation, we pivoted to a semi-automated hybrid approach (Manual Quantity + Real-time Market Data).
+## 요약 (Summary)
+키움증권 Open API를 활용해 미국 주식 포트폴리오 데이터를 자동으로 수집하려 했으나, 심각한 기술적 제약과 시스템 파편화 문제로 인해 **반자동 하이브리드 방식(수량 수동 입력 + 실시간 시세 자동 조회)**으로 전환하였습니다.
 
-## Technical Limitations Identified
+## 식별된 기술적 한계 (Technical Limitations)
 
-### 1. Fragmentation of Systems
-- **OpenAPI+ (Domestic)** vs **OpenAPI W (Global)**: Kiwoom operates two completely separate API modules.
-- The standard `OpenAPI+`, which is widely used and documented, **does not support US stock inquiries**.
-- To access global stocks, a separate installation of `OpenAPI W` is required.
+### 1. 시스템의 파편화 (Fragmentation)
+- **OpenAPI+ (국내용)** vs **OpenAPI W (해외용)**: 키움증권은 두 개의 완전히 분리된 API 모듈을 운영합니다.
+- 국내에서 널리 쓰이는 표준 `OpenAPI+`는 **미국 주식 조회를 지원하지 않습니다.**
+- 해외 주식에 접근하려면 `OpenAPI W`라는 별도의 모듈을 설치해야 합니다.
 
-### 2. Environment Constraints
-- Both APIs strictly require a **32-bit Python environment**, which conflicts with modern 64-bit development workflows.
-- This forces the maintenance of a separate virtual environment and specific legacy library versions (e.g., older `pandas`, `numpy`).
+### 2. 개발 환경의 제약 (Environment Constraints)
+- 두 API 모두 **32비트(32-bit) Python 환경**을 필수적으로 요구합니다. 이는 현대적인 64비트 개발 환경과 충돌합니다.
+- 이로 인해 별도의 32비트 가상환경을 유지해야 하며, `pandas`, `numpy` 등 핵심 라이브러리의 구형 버전을 강제로 사용해야 하는 유지보수 부담이 발생합니다.
 
-### 3. Limited Functionality for Global Stocks
-- Even 'Global' APIs from Kiwoom focus heavily on **Futures & Options**, offering limited support for standard stock portfolio management.
-- Authentication and session management for global accounts are more complex and unstable compared to domestic ones.
+### 3. 해외 주식 기능의 부족 (Limited Functionality)
+- 키움의 'Global' API조차 주로 **해외 선물/옵션(Futures & Options)** 트레이딩에 초점이 맞춰져 있어, 일반적인 주식 포트폴리오 잔고 관리 기능은 매우 제한적입니다.
+- 해외 계좌의 인증 및 세션 관리가 국내용에 비해 복잡하고 불안정합니다.
 
-## Resolution
-- **Deprecated**: Direct connection to Kiwoom API (`src/kiwoom.py` and 32-bit setup).
-- **Adoped Steps**:
-    1. **Data Source**: Switched to `yfinance` API for reliable, 64-bit compatible real-time US stock data.
-    2. **Portfolio Management**: Implemented `PortfolioManager` to calculate valuations based on manually inputted holdings and exchange rates.
-    3. **Currency Handling**: Added logic to account for historical exchange rates (at purchase) vs. current real-time exchange rates to calculate accurate KRW returns.
+## 해결 방안 (Resolution)
+
+- **폐기 (Deprecated)**: 키움 API 직접 연결 방식 및 32비트 환경 설정 (`src/kiwoom.py` 삭제).
+- **채택된 방식 (Adopted Steps)**:
+    1. **데이터 소스**: 64비트 환경에서 안정적으로 작동하는 `yfinance` API를 도입하여 실시간 미국 주식 데이터를 확보했습니다.
+    2. **포트폴리오 관리**: `PortfolioManager`를 구현하여, 수동으로 입력된 보유 수량에 실시간 시세를 적용해 가치를 산출하도록 했습니다.
+    3. **환율 처리**: '매수 시점의 과거 환율'과 '현재 실시간 환율'을 구분하여 적용하는 로직을 추가해, 정확한 원화(KRW) 수익률을 계산할 수 있게 되었습니다.
