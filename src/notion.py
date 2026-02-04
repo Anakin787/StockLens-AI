@@ -7,6 +7,14 @@ class NotionReporter:
         self.database_id = config['notion']['database_id']
         self.client = Client(auth=self.token)
         self.title_prefix = config['notion'].get('page_title_prefix', 'Financial Report')
+        
+        # Hardcoded based on USER request: Date / Report
+        self.title_prop_name = "Report"  # The title property
+        self.date_prop_name = "Date"     # The date property
+
+    def _resolve_schema(self):
+        # Disabled dynamic resolution to rely on user-provided names
+        pass
 
     def create_report(self, asset_data, news_data):
         """
@@ -35,7 +43,7 @@ class NotionReporter:
             
             # Portfolio Table (Simplified)
             if 'portfolio' in asset_data:
-                port_text = "held Stocks:\n"
+                port_text = "Held Stocks:\n"
                 for stock in asset_data['portfolio']:
                     port_text += f"- {stock['name']}: {stock['profit_rate']}%\n"
                 children_blocks.append(self._create_paragraph_block(port_text))
@@ -60,16 +68,23 @@ class NotionReporter:
 
         # Create the page
         try:
+            # Build properties dynamically based on resolved schema
+            page_properties = {
+                self.title_prop_name: {
+                    "title": [{"text": {"content": title}}]
+                }
+            }
+            
+            # Only add Date if we have a valid date property name (or fallback)
+            # If the DB doesn't have this column, this might fail, but that's expected.
+            if self.date_prop_name:
+                page_properties[self.date_prop_name] = {
+                    "date": {"start": date_str}
+                }
+
             self.client.pages.create(
                 parent={"database_id": self.database_id},
-                properties={
-                    "Name": {
-                        "title": [{"text": {"content": title}}]
-                    },
-                    "Date": {
-                        "date": {"start": date_str}
-                    }
-                },
+                properties=page_properties,
                 children=children_blocks
             )
             print(f"[Notion] Successfully created report: {title}")
