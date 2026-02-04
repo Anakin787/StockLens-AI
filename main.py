@@ -1,7 +1,8 @@
 import yaml
 import sys
 import os
-from src.kiwoom import KiwoomManager
+from src.portfolio_manager import PortfolioManager
+# from src.kiwoom import KiwoomManager # Kiwoom paused for now
 from src.notion import NotionReporter
 from src.news import NewsFetcher
 
@@ -20,11 +21,11 @@ def main():
     # 1. Load Config
     config = load_config()
     
-    # 2. Fetch Assets (Kiwoom)
-    print(">>> Connecting to Kiwoom...")
-    kiwoom = KiwoomManager(config)
-    assets = kiwoom.get_assets()
-    print(f"Summary: {assets.get('total_evaluation', 0)} KRW")
+    # 2. Fetch Assets (Hybrid: Manual Qty + Real-time Price)
+    print(">>> Fetching Portfolio Data (YFinance)...")
+    pm = PortfolioManager(config)
+    assets = pm.fetch_portfolio_data()
+    print(f"Summary: {assets.get('total_evaluation', 0):,} KRW (Profit: {assets.get('profit_rate', 0)}%)")
     
     # 3. Fetch News
     print(">>> Fetching News...")

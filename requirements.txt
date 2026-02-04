@@ -1,8 +1,6 @@
-pykiwoom
-notion-client
+yfinance
 pyyaml
-beautifulsoup4
+notion-client
 requests
+beautifulsoup4
 feedparser
-PyQt5
-pandas
