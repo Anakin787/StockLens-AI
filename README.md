@@ -1,4 +1,14 @@
-# StockLens-AI
+<p align="center">
+  <img src="assets/logo.png" alt="StockLens AI" width="120"/>
+</p>
+
+<h1 align="center">StockLens-AI</h1>
+
+<p align="center">
+  토스증권 Open API 기반 포트폴리오 리포트 · 대시보드
+</p>
+
+---
 
 토스증권 Open API로 포트폴리오를 읽어 **Notion 일일 리포트**를 만들고, **로컬 대시보드**로 자산 현황을 보여주는 개인용 도구입니다.
 
