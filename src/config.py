@@ -115,7 +115,12 @@ class NotionConfig:
 
     @property
     def is_configured(self):
-        return bool(self.token) and self.token != NOTION_TOKEN_PLACEHOLDER
+        return (
+            bool(self.token)
+            and self.token != NOTION_TOKEN_PLACEHOLDER
+            and bool(self.database_id)
+            and self.database_id != "YOUR_DATABASE_ID"
+        )
 
 
 @dataclass(frozen=True)
@@ -253,9 +258,12 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
         base_url=raw_toss.get("base_url", DEFAULT_BASE_URL),
         token_cache=raw_toss.get("token_cache", DEFAULT_TOKEN_CACHE),
     )
+    # The Notion token is a secret too, so the environment wins here as well.
+    notion_token = os.environ.get("NOTION_TOKEN") or raw_notion.get("token", "")
     notion = NotionConfig(
-        token=raw_notion.get("token", ""),
-        database_id=raw_notion.get("database_id", ""),
+        token="" if is_placeholder(notion_token) else notion_token,
+        database_id=os.environ.get("NOTION_DATABASE_ID")
+        or raw_notion.get("database_id", ""),
         page_title_prefix=raw_notion.get("page_title_prefix", "Financial Report"),
     )
     # The AI key is optional - an unfilled placeholder just means no analysis,

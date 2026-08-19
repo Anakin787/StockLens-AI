@@ -6,6 +6,14 @@ quietly reporting success, which the previous version did.
 
 import sys
 
+# The Windows console is often cp949, which cannot encode characters like an
+# em dash. Without this, a diagnostic script dies on its own status message.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from src.analyst import Analyst
 from src.config import load_config
 from src.news import NewsFetcher

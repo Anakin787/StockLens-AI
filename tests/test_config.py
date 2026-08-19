@@ -224,3 +224,49 @@ def test_real_credentials_are_not_mistaken_for_placeholders(monkeypatch):
     config = load_config("does-not-exist.yaml", load_env=False)
 
     assert config.toss.client_secret == "tssk_live_realvalue"
+
+
+def test_notion_token_prefers_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOTION_TOKEN", "ntn_fromenv")
+    monkeypatch.setenv("NOTION_DATABASE_ID", "db-from-env")
+    path = write_config(
+        tmp_path,
+        """
+        notion:
+          token: "secret_fromfile"
+          database_id: "db-from-file"
+        """,
+    )
+    notion = load_config(path, load_env=False).notion
+
+    assert notion.token == "ntn_fromenv"
+    assert notion.database_id == "db-from-env"
+    assert notion.is_configured
+
+
+def test_notion_needs_both_token_and_database(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        notion:
+          token: "ntn_real"
+          database_id: "YOUR_DATABASE_ID"
+        """,
+    )
+    # A valid token pointing at nothing fails later with a confusing 404, so
+    # treat it as unconfigured up front.
+    assert not load_config(path, load_env=False).notion.is_configured
+
+
+def test_notion_placeholder_token_is_not_configured(monkeypatch):
+    monkeypatch.setenv("NOTION_TOKEN", "PASTE_YOUR_NOTION_TOKEN")
+    monkeypatch.setenv("NOTION_DATABASE_ID", "abc")
+
+    assert not load_config("does-not-exist.yaml", load_env=False).notion.is_configured
+
+
+def test_modern_ntn_token_is_accepted(monkeypatch):
+    monkeypatch.setenv("NOTION_TOKEN", "ntn_1234567890abcdef")
+    monkeypatch.setenv("NOTION_DATABASE_ID", "2f1a8b3c4d5e6f7a8b9c0d1e2f3a4b5c")
+
+    assert load_config("does-not-exist.yaml", load_env=False).notion.is_configured

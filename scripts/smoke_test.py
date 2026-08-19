@@ -15,6 +15,14 @@ on every issuance, so needless refreshes are a real problem, not just waste.
 import os
 import sys
 
+# The Windows console is often cp949, which cannot encode characters like an
+# em dash. Without this, a diagnostic script dies on its own status message.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import load_config  # noqa: E402
@@ -33,6 +41,61 @@ def _ok(label, value):
 
 def _warn(label, value):
     print(f"  [warn] {label}: {value}")
+
+
+#: Property names src/notion.py writes to. A database missing either of these
+#: rejects the page at creation time.
+REQUIRED_NOTION_PROPS = {"Report": "title", "Date": "date"}
+
+
+def _check_notion(config):
+    """Verify the token, the database connection and the schema.
+
+    Two failures are easy to hit and hard to read from the API error alone:
+    forgetting to connect the integration to the database (404 despite a valid
+    token), and a database whose title/date properties are named differently.
+    """
+    if not config.notion.is_configured:
+        _warn("notion", "미설정: .env 의 NOTION_TOKEN / NOTION_DATABASE_ID 를 채우세요.")
+        return
+
+    try:
+        from notion_client import Client
+        from notion_client.errors import APIResponseError
+    except ImportError:
+        _warn("notion", "notion-client 가 설치되지 않았습니다.")
+        return
+
+    try:
+        database = Client(auth=config.notion.token).databases.retrieve(
+            database_id=config.notion.database_id
+        )
+    except APIResponseError as exc:
+        if getattr(exc, "code", "") == "object_not_found":
+            _warn(
+                "notion",
+                "데이터베이스를 찾을 수 없습니다. DB 페이지의 [...] > Connections 에서 "
+                "integration 을 연결했는지, database_id 가 맞는지 확인하세요.",
+            )
+        elif getattr(exc, "code", "") == "unauthorized":
+            _warn("notion", "토큰이 유효하지 않습니다 (NOTION_TOKEN 확인).")
+        else:
+            _warn("notion", f"{exc}")
+        return
+
+    title = "".join(part.get("plain_text", "") for part in database.get("title", []))
+    _ok("database", title or config.notion.database_id)
+
+    properties = database.get("properties") or {}
+    for name, expected in REQUIRED_NOTION_PROPS.items():
+        actual = (properties.get(name) or {}).get("type")
+        if actual == expected:
+            _ok(f"속성 {name}", expected)
+        elif actual:
+            _warn(f"속성 {name}", f"타입이 {actual} 입니다 ({expected} 이어야 함)")
+        else:
+            available = ", ".join(properties) or "(없음)"
+            _warn(f"속성 {name}", f"없습니다. 현재 속성: {available}")
 
 
 def main():
@@ -93,6 +156,9 @@ def main():
         print("\n5) GET /api/v1/market-calendar")
         for country, calendar in service.market_status().items():
             _ok(country, "조회됨" if calendar else "조회 실패")
+
+        print("\n6) Notion")
+        _check_notion(config)
 
         print("\n=== 모든 호출 성공 ===")
         return 0

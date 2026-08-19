@@ -63,12 +63,28 @@ Python 3.10 이상 (3.12에서 개발·검증).
 자격증명은 `config.yaml`이 아니라 `.env`에 둡니다 (gitignore 대상). 리포지토리에 이미 `.env`가 플레이스홀더로 생성되어 있으니 값만 교체하면 됩니다.
 
 ```
-TOSS_CLIENT_ID=c_xxxxxxxxxxxx
+TOSS_CLIENT_ID=tsck_live_xxxxxxxxxxxx
 TOSS_CLIENT_SECRET=tssk_live_xxxxxxxxxxxx
-GOOGLE_AI_API_KEY=xxxxxxxxxxxx     # 선택 — 없으면 AI 분석만 생략
+GOOGLE_AI_API_KEY=xxxxxxxxxxxx        # 선택. 없으면 AI 분석만 생략
+NOTION_TOKEN=ntn_xxxxxxxxxxxx         # 일일 리포트용
+NOTION_DATABASE_ID=2f1a8b3c4d5e...    # DB URL 의 ?v= 앞 32자
 ```
 
 교체를 잊으면 앱이 *"`.env`의 TOSS_CLIENT_ID가 아직 플레이스홀더입니다"* 라고 알려줍니다.
+
+### Notion 토큰 받기
+
+Claude 등의 **MCP 커넥터는 쓸 수 없습니다.** OAuth 방식이라 재사용 가능한
+토큰을 내주지 않기 때문에, Internal Integration 을 따로 만들어야 합니다.
+
+1. https://www.notion.so/profile/integrations → **New integration** (Type: Internal)
+   → **Internal Integration Secret** 복사 (`ntn_` 또는 예전 계정은 `secret_` 로 시작)
+2. ⚠️ **리포트를 넣을 데이터베이스 페이지에서 `⋯` → Connections → 해당 integration 연결.**
+   이 단계를 빼먹으면 토큰이 맞아도 API 가 404 를 반환합니다.
+3. DB 를 전체 페이지로 열고 URL 의 `?v=` 앞 32자가 `database_id` 입니다.
+
+데이터베이스에는 **`Report`(제목)** 와 **`Date`(날짜)** 속성이 있어야 합니다.
+`python scripts/smoke_test.py` 가 토큰·연결·속성을 한 번에 점검해 줍니다.
 
 > **왜 파일이 아니라 환경변수인가**: Phase 2부터 이 키는 조회가 아니라 **주문 실행 권한**을 가집니다. 채팅·이슈·스크린샷에 노출하지 마세요. 노출됐다면 WTS에서 즉시 재발급하면 됩니다 — 재발급은 유출된 토큰도 그 즉시 무효화합니다.
 
@@ -127,7 +143,7 @@ portfolio:
 python scripts/smoke_test.py
 ```
 
-`/accounts` → `/holdings` → `/prices` → `/exchange-rate` → `/market-calendar`를 순서대로 호출합니다. GET만 사용하므로 주문이 나갈 수 없습니다.
+`/accounts` → `/holdings` → `/prices` → `/exchange-rate` → `/market-calendar` → Notion 을 순서대로 점검합니다. GET만 사용하므로 주문이 나갈 수 없습니다.
 
 **연속 2회 실행**해 보세요. 2회차에 토큰이 재발급되지 않아야 정상입니다.
 
@@ -172,7 +188,7 @@ StockLens-AI/
 ├── config.example.yaml      # 설정 템플릿
 ├── scripts/smoke_test.py    # 읽기전용 연결 점검
 ├── docs/ui/                 # 대시보드 디자인 원본 (DESIGN.md, mockup.html)
-├── tests/                   # 63개 — 네트워크·자격증명 불필요
+├── tests/                   # 74개 — 네트워크·자격증명 불필요
 └── src/
     ├── config.py            # .env 우선 자격증명, 심볼 정규화, v1 하위호환
     ├── toss/
@@ -206,7 +222,7 @@ pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-63개 전부 네트워크·자격증명 없이 실행됩니다 (HTTP 모킹). 커버 범위: 토큰 캐시 재사용, 401 재발급 1회 제한, 429 `Retry-After` 준수, 쓰기 가드, KRW 환산·환차손익, 중복 심볼 병합, `Decimal` 정밀도, 대시보드 API·캐시.
+74개 전부 네트워크·자격증명 없이 실행됩니다 (HTTP 모킹). 커버 범위: 토큰 캐시 재사용, 401 재발급 1회 제한, 429 `Retry-After` 준수, 쓰기 가드, KRW 환산·환차손익, 중복 심볼 병합, `Decimal` 정밀도, 대시보드 API·캐시.
 
 ---
 
