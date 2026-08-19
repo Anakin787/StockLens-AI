@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>StockLens AI - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-primary": "#002a78",
+                        "on-secondary-container": "#00311f",
+                        "surface-bright": "#31394d",
+                        "on-secondary-fixed": "#002113",
+                        "on-primary-fixed-variant": "#003ea8",
+                        "inverse-on-surface": "#283044",
+                        "on-surface-variant": "#c3c6d7",
+                        "surface": "#0b1326",
+                        "tertiary-fixed": "#ffdadb",
+                        "tertiary-fixed-dim": "#ffb2b7",
+                        "surface-container-low": "#131b2e",
+                        "on-primary-fixed": "#00174b",
+                        "surface-container-highest": "#2d3449",
+                        "surface-tint": "#b4c5ff",
+                        "secondary-fixed-dim": "#4edea3",
+                        "inverse-primary": "#0053db",
+                        "tertiary": "#ffb2b7",
+                        "on-secondary-fixed-variant": "#005236",
+                        "primary-container": "#2563eb",
+                        "primary-fixed": "#dbe1ff",
+                        "outline-variant": "#434655",
+                        "tertiary-container": "#d22348",
+                        "secondary-container": "#00a572",
+                        "on-background": "#dae2fd",
+                        "on-error-container": "#ffdad6",
+                        "error": "#ffb4ab",
+                        "surface-container": "#171f33",
+                        "error-container": "#93000a",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "inverse-surface": "#dae2fd",
+                        "surface-container-lowest": "#060e20",
+                        "on-secondary": "#003824",
+                        "on-primary-container": "#eeefff",
+                        "on-tertiary-fixed": "#40000d",
+                        "primary": "#b4c5ff",
+                        "secondary-fixed": "#6ffbbe",
+                        "surface-variant": "#2d3449",
+                        "secondary": "#4edea3",
+                        "outline": "#8d90a0",
+                        "surface-dim": "#0b1326",
+                        "on-tertiary-fixed-variant": "#92002a",
+                        "on-tertiary": "#67001b",
+                        "on-surface": "#dae2fd",
+                        "surface-container-high": "#222a3d",
+                        "on-error": "#690005",
+                        "background": "#0b1326",
+                        "on-tertiary-container": "#ffecec"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    spacing: {
+                        "unit": "4px",
+                        "gutter": "12px",
+                        "margin": "24px",
+                        "container-max": "1600px"
+                    },
+                    fontFamily: {
+                        "headline-md-mobile": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "data-mono": ["JetBrains Mono"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "display-lg": ["Inter"]
+                    },
+                    fontSize: {
+                        "headline-md-mobile": ["18px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "data-mono": ["13px", { "lineHeight": "16px", "letterSpacing": "-0.01em", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "display-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-background text-on-surface font-body-md text-body-md antialiased overflow-hidden flex h-screen w-full">
+<!-- SideNavBar (from JSON) -->
+<nav class="bg-surface dark:bg-surface fixed left-0 top-0 h-screen w-[220px] border-r border-outline-variant flex flex-col justify-between py-margin px-gutter z-50">
+<div>
+<!-- Header Brand -->
+<div class="mb-8 px-2">
+<div class="flex items-center gap-3 mb-1">
+<span class="material-symbols-outlined text-primary text-3xl" data-icon="troubleshoot" data-weight="fill" style="font-variation-settings: 'FILL' 1;">troubleshoot</span>
+<h1 class="font-display-lg text-display-lg text-primary text-xl leading-none">StockLens AI</h1>
+</div>
+<p class="text-on-surface-variant font-data-mono text-data-mono text-xs uppercase tracking-wider">Quantitative Analysis</p>
+</div>
+<!-- Navigation Tabs -->
+<ul class="space-y-1">
+<!-- Active Item: Overview -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-primary font-bold border-r-2 border-primary bg-surface-container-high transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="dashboard">dashboard</span>
+<span>Overview</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant font-body-md hover:bg-surface-container-high transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="account_balance_wallet">account_balance_wallet</span>
+<span>Holdings</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant font-body-md hover:bg-surface-container-high transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="candlestick_chart">candlestick_chart</span>
+<span>Trading</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant font-body-md hover:bg-surface-container-high transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="bar_chart">bar_chart</span>
+<span>Reports</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant font-body-md hover:bg-surface-container-high transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+<span>Settings</span>
+</a>
+</li>
+</ul>
+</div>
+<div>
+<!-- CTA / Status -->
+<div class="mb-6 px-2">
+<div class="bg-surface-container p-3 rounded-lg border border-outline-variant/50">
+<div class="flex items-center gap-2 mb-2">
+<div class="w-2 h-2 rounded-full bg-secondary-container animate-pulse"></div>
+<span class="font-label-caps text-label-caps text-on-surface">Brokerage API: Connected</span>
+</div>
+</div>
+</div>
+<!-- Footer Sync -->
+<div class="flex items-center gap-2 px-3 py-2 text-on-surface-variant/70 text-xs font-data-mono">
+<span class="material-symbols-outlined text-[16px] animate-spin-slow" data-icon="sync">sync</span>
+<span>Last Sync: 10:42 AM</span>
+</div>
+</div>
+</nav>
+<!-- Main Content Wrapper -->
+<div class="ml-[220px] w-[calc(100%-220px)] h-full flex flex-col">
+<!-- TopNavBar (from JSON) -->
+<header class="bg-surface/40 backdrop-blur-md fixed top-0 right-0 left-[220px] h-16 border-b border-outline-variant flex justify-between items-center px-margin z-40">
+<h2 class="font-headline-md text-headline-md font-bold text-on-surface">Overview</h2>
+<div class="flex items-center gap-6">
+<!-- Market Status Links -->
+<div class="hidden lg:flex gap-4 font-data-mono text-data-mono text-xs">
+<span class="text-on-surface-variant border border-outline-variant px-2 py-1 rounded">USD/KRW: 1,342.50</span>
+<span class="text-secondary-fixed-dim bg-secondary-container/10 border border-secondary-container/30 px-2 py-1 rounded flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-secondary-fixed-dim"></span>KRX: Open</span>
+<span class="text-on-surface-variant/50 border border-outline-variant/30 px-2 py-1 rounded">US: Closed</span>
+</div>
+<div class="h-6 w-px bg-outline-variant hidden lg:block"></div>
+<!-- Trailing Actions -->
+<div class="flex items-center gap-4">
+<button class="bg-error-container/20 text-error border border-error/50 hover:bg-error-container/40 px-4 py-1.5 rounded font-label-caps text-label-caps tracking-wide transition-colors active:scale-95">PAUSE TRADING</button>
+<button class="text-on-surface-variant hover:text-on-surface transition-colors active:scale-95">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-on-surface transition-colors active:scale-95">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Scrollable Main Canvas -->
+<main class="flex-1 overflow-y-auto mt-16 p-margin bg-background">
+<div class="max-w-container-max mx-auto space-y-gutter">
+<!-- 1. ALERT BANNER -->
+<div class="bg-surface-container-high border-l-[3px] border-[#f59e0b] rounded shadow-sm p-4 flex items-start gap-3">
+<span class="material-symbols-outlined text-[#f59e0b] mt-0.5" data-icon="warning" style="font-variation-settings: 'FILL' 1;">warning</span>
+<div>
+<p class="font-headline-md text-[15px] font-semibold text-on-surface leading-tight">삼성전자 · Volatility Interruption triggered</p>
+<p class="font-body-md text-body-md text-on-surface-variant mt-1 text-sm">Trading temporarily halted due to rapid price movement. Algorithm has paused active orders for KRX:005930.</p>
+</div>
+</div>
+<!-- 2. KPI ROW (4 cards) -->
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-gutter">
+<!-- KPI 1: Total Assets -->
+<div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden group">
+<div class="relative z-10">
+<p class="text-on-surface-variant font-label-caps text-label-caps uppercase tracking-wider mb-2">Total Assets</p>
+<h3 class="font-data-mono text-2xl text-on-surface font-bold tracking-tight">1,450,230,000 <span class="text-sm font-normal text-on-surface-variant">KRW</span></h3>
+<p class="text-on-surface-variant/70 font-data-mono text-xs mt-1">≈ $1,080,245</p>
+</div>
+<!-- Decorative bg sparkline (SVG placeholder) -->
+<div class="absolute bottom-0 left-0 w-full h-12 opacity-20 pointer-events-none">
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 30"><path class="text-primary" d="M0,30 L0,20 Q10,15 20,22 T40,18 T60,25 T80,10 T100,15 L100,30 Z" fill="currentColor"></path></svg>
+</div>
+</div>
+<!-- KPI 2: Total P&L -->
+<div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden group">
+<div class="relative z-10">
+<p class="text-on-surface-variant font-label-caps text-label-caps uppercase tracking-wider mb-2">Total P&amp;L</p>
+<div class="flex items-baseline gap-2">
+<h3 class="font-data-mono text-2xl text-secondary-fixed-dim font-bold tracking-tight">+120,450,000 <span class="text-sm font-normal">KRW</span></h3>
+</div>
+<div class="flex items-center gap-2 mt-1">
+<span class="bg-secondary-container/20 text-secondary-fixed-dim px-1.5 py-0.5 rounded font-data-mono text-[10px] font-bold">+9.05%</span>
+<span class="text-on-surface-variant/70 font-data-mono text-[10px]">after fees &amp; tax</span>
+</div>
+</div>
+<div class="absolute bottom-0 left-0 w-full h-12 opacity-20 pointer-events-none">
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 30"><path class="text-secondary-fixed-dim" d="M0,30 L0,25 Q10,28 20,20 T40,22 T60,15 T80,18 T100,5 L100,30 Z" fill="currentColor"></path></svg>
+</div>
+</div>
+<!-- KPI 3: Today's P&L -->
+<div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden group">
+<div class="relative z-10">
+<p class="text-on-surface-variant font-label-caps text-label-caps uppercase tracking-wider mb-2">Today's P&amp;L</p>
+<div class="flex items-baseline gap-2">
+<h3 class="font-data-mono text-2xl text-secondary-fixed-dim font-bold tracking-tight">+4,200,000 <span class="text-sm font-normal">KRW</span></h3>
+</div>
+<div class="flex items-center gap-1 mt-1 text-secondary-fixed-dim font-data-mono text-[11px]">
+<span class="material-symbols-outlined text-[14px]" data-icon="arrow_upward">arrow_upward</span>
+<span>+0.29%</span>
+</div>
+</div>
+<div class="absolute bottom-0 left-0 w-full h-12 opacity-20 pointer-events-none">
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 30"><path class="text-secondary-fixed-dim" d="M0,30 L0,20 Q15,25 25,18 T50,22 T75,10 T100,5 L100,30 Z" fill="currentColor"></path></svg>
+</div>
+</div>
+<!-- KPI 4: Cash Buying Power -->
+<div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden group">
+<div class="relative z-10">
+<p class="text-on-surface-variant font-label-caps text-label-caps uppercase tracking-wider mb-2">Cash Buying Power</p>
+<h3 class="font-data-mono text-2xl text-on-surface font-bold tracking-tight">250,000,000 <span class="text-sm font-normal text-on-surface-variant">KRW</span></h3>
+<div class="flex items-center gap-2 mt-1">
+<span class="text-on-surface-variant/70 font-data-mono text-xs">USD 45,000</span>
+</div>
+</div>
+<div class="absolute bottom-0 left-0 w-full h-12 opacity-10 pointer-events-none">
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 30"><path class="text-on-surface" d="M0,30 L0,20 L100,20 L100,30 Z" fill="currentColor"></path></svg>
+</div>
+</div>
+</div>
+<!-- 3. TWO-COLUMN SECTION -->
+<div class="grid grid-cols-1 xl:grid-cols-12 gap-gutter">
+<!-- Left: Portfolio Chart (65%) -->
+<div class="xl:col-span-8 bg-surface-container rounded-lg border border-outline-variant/50 p-4 flex flex-col">
+<div class="flex justify-between items-center mb-4">
+<h3 class="font-headline-md text-headline-md font-bold text-on-surface">Portfolio Value</h3>
+<!-- Range Toggles Segmented Control -->
+<div class="flex bg-surface-container-highest rounded p-0.5 border border-outline-variant/30">
+<button class="px-3 py-1 text-[11px] font-data-mono font-bold rounded text-on-surface-variant hover:text-on-surface transition-colors">1W</button>
+<button class="px-3 py-1 text-[11px] font-data-mono font-bold rounded text-on-surface-variant hover:text-on-surface transition-colors">1M</button>
+<button class="px-3 py-1 text-[11px] font-data-mono font-bold rounded bg-surface border border-outline-variant/50 text-on-surface shadow-sm">3M</button>
+<button class="px-3 py-1 text-[11px] font-data-mono font-bold rounded text-on-surface-variant hover:text-on-surface transition-colors">1Y</button>
+<button class="px-3 py-1 text-[11px] font-data-mono font-bold rounded text-on-surface-variant hover:text-on-surface transition-colors">ALL</button>
+</div>
+</div>
+<!-- Chart Area Placeholder -->
+<div class="flex-1 min-h-[300px] relative w-full rounded border border-outline-variant/20 bg-surface-container-lowest overflow-hidden flex items-end">
+<!-- Faux Area Chart -->
+<svg class="w-full h-full absolute inset-0" preserveaspectratio="none" viewbox="0 0 100 100">
+<defs>
+<lineargradient id="chartGradient" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" stop-color="#2563eb" stop-opacity="0.4"></stop>
+<stop offset="100%" stop-color="#2563eb" stop-opacity="0"></stop>
+</lineargradient>
+</defs>
+<path d="M0,100 L0,70 Q10,65 20,75 T40,60 T60,40 T80,30 L100,20 L100,100 Z" fill="url(#chartGradient)"></path>
+<path class="drop-shadow-[0_0_8px_rgba(37,99,235,0.5)]" d="M0,70 Q10,65 20,75 T40,60 T60,40 T80,30 L100,20" fill="none" stroke="#2563eb" stroke-width="2"></path>
+</svg>
+<!-- Grid lines -->
+<div class="absolute inset-0 flex flex-col justify-between pointer-events-none opacity-10">
+<div class="w-full border-t border-on-surface"></div>
+<div class="w-full border-t border-on-surface"></div>
+<div class="w-full border-t border-on-surface"></div>
+<div class="w-full border-t border-on-surface"></div>
+</div>
+</div>
+</div>
+<!-- Right: Allocation Donut (35%) -->
+<div class="xl:col-span-4 bg-surface-container rounded-lg border border-outline-variant/50 p-4 flex flex-col">
+<h3 class="font-headline-md text-headline-md font-bold text-on-surface mb-4">Allocation</h3>
+<!-- Tabs -->
+<div class="flex border-b border-outline-variant/50 mb-6">
+<button class="px-4 py-2 font-body-md text-sm text-primary border-b-2 border-primary -mb-px relative">By Market (KR/US)</button>
+<button class="px-4 py-2 font-body-md text-sm text-on-surface-variant hover:text-on-surface transition-colors">By Currency</button>
+</div>
+<!-- Donut Chart Container -->
+<div class="flex-1 flex flex-col items-center justify-center relative">
+<!-- SVG Donut -->
+<div class="relative w-48 h-48">
+<svg class="w-full h-full transform -rotate-90" viewbox="0 0 100 100">
+<circle cx="50" cy="50" fill="none" r="40" stroke="#1e293b" stroke-width="12"></circle>
+<!-- US Segment 35% -->
+<circle cx="50" cy="50" fill="none" r="40" stroke="#2563eb" stroke-dasharray="87.96 251.2" stroke-dashoffset="0" stroke-width="12"></circle>
+<!-- KR Segment 65% -->
+<circle cx="50" cy="50" fill="none" r="40" stroke="#00a572" stroke-dasharray="163.28 251.2" stroke-dashoffset="-87.96" stroke-width="12"></circle>
+</svg>
+<!-- Center Label -->
+<div class="absolute inset-0 flex flex-col items-center justify-center text-center">
+<span class="font-data-mono text-sm text-on-surface-variant">KRX</span>
+<span class="font-headline-md text-xl font-bold text-on-surface">65%</span>
+</div>
+</div>
+<!-- Legend -->
+<div class="w-full mt-6 space-y-2">
+<div class="flex justify-between items-center text-sm">
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-sm bg-secondary-container"></div>
+<span class="text-on-surface">KRX (Domestic)</span>
+</div>
+<span class="font-data-mono font-medium">942,650,000</span>
+</div>
+<div class="flex justify-between items-center text-sm">
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-sm bg-primary-container"></div>
+<span class="text-on-surface">US (Foreign)</span>
+</div>
+<span class="font-data-mono font-medium">507,580,000</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- 4. AI ANALYST INSIGHT -->
+<div class="relative rounded-lg overflow-hidden border border-primary/30 p-[1px] bg-gradient-to-r from-primary-container/20 via-surface-container to-primary-container/10">
+<div class="bg-surface-container-high/90 backdrop-blur-md w-full h-full rounded-[7px] p-5 flex items-start sm:items-center gap-4 shadow-[0_0_15px_rgba(37,99,235,0.1)]">
+<div class="w-10 h-10 rounded-full bg-primary-container/20 flex items-center justify-center border border-primary/50 flex-shrink-0">
+<span class="material-symbols-outlined text-primary animate-pulse" data-icon="auto_awesome">auto_awesome</span>
+</div>
+<div class="flex-1">
+<p class="font-body-md text-on-surface text-[15px] leading-relaxed">
+<span class="font-semibold text-primary">AI Analyst Insight:</span> Analyzing market momentum... KRX:005930 showing strong support levels at 70,000 KRW. Algorithmic sentiment model suggests short-term mean reversion.
+                            </p>
+</div>
+<button class="hidden sm:block text-xs font-label-caps text-primary border border-primary/50 hover:bg-primary/10 px-3 py-1.5 rounded transition-colors">VIEW DETAILS</button>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

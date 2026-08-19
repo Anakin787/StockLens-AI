@@ -1,54 +1,95 @@
-import yaml
-import sys
-import os
-from src.portfolio_manager import PortfolioManager
-# from src.kiwoom import KiwoomManager # Kiwoom paused for now
-from src.notion import NotionReporter
-from src.news import NewsFetcher
-from src.analyst import Analyst
+"""Daily report entry point.
 
-def load_config():
-    config_path = "config.yaml"
-    if not os.path.exists(config_path):
-        print("Config file not found. Please create 'config.yaml'.")
-        sys.exit(1)
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+Exits non-zero on failure so a scheduled run surfaces problems instead of
+quietly reporting success, which the previous version did.
+"""
+
+import sys
+
+from src.analyst import Analyst
+from src.config import load_config
+from src.news import NewsFetcher
+from src.notion import NotionReporter
+from src.pipeline import PortfolioService
+from src.store.repo import Store
+from src.toss.errors import TossError
+
+
+def run():
+    print(">>> Starting Financial Reporter...")
+
+    config = load_config()
+
+    # 1. Portfolio: Toss account (automatic) + manual entries for holdings
+    #    kept at other brokers, priced through the Toss market data API.
+    print(">>> Fetching portfolio (Toss Open API)...")
+    service = PortfolioService(config)
+    try:
+        snapshot = service.snapshot()
+    finally:
+        service.close()
+
+    print(
+        f"Summary: {snapshot.total_krw:,.0f} KRW "
+        f"(P&L {snapshot.profit_krw:+,.0f}, {snapshot.profit_rate * 100:+.2f}%)"
+    )
+    if snapshot.daily_profit_krw:
+        print(
+            f"Today:   {snapshot.daily_profit_krw:+,.0f} KRW "
+            f"({snapshot.daily_profit_rate * 100:+.2f}%)"
+        )
+    if snapshot.warnings:
+        print(f"Warnings: {len(snapshot.warnings)} -> {'; '.join(snapshot.warnings)}")
+
+    # 2. Persist before anything that can fail on a third-party service. The
+    #    Portfolio Value chart cannot be backfilled, so the snapshot is worth
+    #    keeping even if Notion or Gemini is down.
+    store = Store(config.db_path)
+    ts = store.save_snapshot(snapshot)
+    print(f">>> Snapshot saved ({ts}, total {store.snapshot_count()} rows)")
+
+    # 3. News
+    print(">>> Fetching news...")
+    news_data = NewsFetcher({"news": {"keywords": config.news_keywords}}).fetch_daily_news()
+    print(f"Fetched {len(news_data.get('general', []))} general news items.")
+
+    # 4. AI analysis
+    print(">>> AI Analyst is thinking...")
+    ai_comment = Analyst(config).analyze_portfolio(snapshot, news_data)
+
+    # 5. Notion
+    if not config.notion.is_configured:
+        print("ERROR: Please set your valid Notion Token in config.yaml")
+        return 1
+
+    print(">>> Reporting to Notion...")
+    report = NotionReporter(config).create_report(snapshot, news_data, ai_comment)
+    if report.get("page_id"):
+        store.save_report(
+            report["page_id"],
+            title=report.get("title"),
+            url=report.get("url"),
+            ai_comment=ai_comment,
+            ts=ts,
+        )
+
+    print(">>> Done.")
+    return 0
+
 
 def main():
-    print(">>> Starting Financial Reporter...")
-    
-    # 1. Load Config
-    config = load_config()
-    
-    # 2. Fetch Assets (Hybrid: Manual Qty + Real-time Price)
-    print(">>> Fetching Portfolio Data (YFinance)...")
-    pm = PortfolioManager(config)
-    assets = pm.fetch_portfolio_data()
-    print(f"Summary: {assets.get('total_evaluation', 0):,} KRW (Profit: {assets.get('profit_rate', 0)}%)")
-    
-    # 3. Fetch News
-    print(">>> Fetching News...")
-    news_fetcher = NewsFetcher(config)
-    news_data = news_fetcher.fetch_daily_news()
-    print(f"Fetched {len(news_data.get('general', []))} general news items.")
-    
-    # 4. AI Analysis
-    print(">>> AI Analyst is thinking...")
-    analyst = Analyst(config)
-    ai_comment = analyst.analyze_portfolio(assets, news_data)
-    
-    # 5. Report to Notion
-    print(">>> Reporting to Notion...")
-    if 'notion' not in config or config['notion']['token'] == "secret_YOUR_NOTION_TOKEN_HERE":
-        print("ERROR: Please set your valid Notion Token in config.yaml")
-        return
+    try:
+        return run()
+    except TossError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - top level guard for the batch job
+        print(f"ERROR: 예기치 못한 오류 - {exc}", file=sys.stderr)
+        import traceback
 
-    reporter = NotionReporter(config)
-    reporter.create_report(assets, news_data, ai_comment)
-    
-    print(">>> Done.")
+        traceback.print_exc()
+        return 3
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

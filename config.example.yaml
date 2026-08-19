@@ -1,0 +1,60 @@
+# StockLens-AI configuration template.
+#
+# Copy to config.yaml and fill in. config.yaml is gitignored.
+#
+# Credentials do NOT belong here. Put them in .env instead:
+#
+#   TOSS_CLIENT_ID=c_xxxxxxxxxxxx
+#   TOSS_CLIENT_SECRET=tssk_live_xxxxxxxxxxxx
+#   GOOGLE_AI_API_KEY=xxxxxxxxxxxx
+#
+# From Phase 2 the Toss credential carries order-placement rights, so the
+# environment is the only place it should live.
+
+toss:
+  # Optional. Omit to use the first account returned by /api/v1/accounts.
+  account_no: null
+  token_cache: ".toss_token.json"
+
+portfolio:
+  # Only holdings OUTSIDE the Toss account go here - Toss holdings are read
+  # automatically. Name, currency and current price are filled in from the
+  # Toss market data API, so only qty and avg_price are maintained by hand.
+  manual:
+    # Korean stock: 6-digit code, no .KS/.KQ suffix (those are stripped
+    # automatically if present, so a v1 config still loads).
+    - symbol: "000660"
+      qty: 10
+      avg_price: 180000
+
+    # US stock. avg_exchange_rate is optional but recommended: Toss does not
+    # report the rate that applied when you bought, and without it the return
+    # for this position excludes FX gain/loss.
+    - symbol: "AAPL"
+      qty: 5
+      avg_price: 180.0
+      avg_exchange_rate: 1300.0
+
+    # An asset Toss does not list at all. No symbol, so supply price yourself.
+    # - name: "금 현물"
+    #   qty: 1
+    #   avg_price: 5000000
+    #   price: 5400000
+    #   currency: "KRW"
+
+report:
+  db_path: "stocklens.db"
+
+news:
+  keywords:
+    - "반도체"
+    - "환율"
+
+google_ai:
+  # Prefer GOOGLE_AI_API_KEY in .env over putting the key here.
+  model: "gemini-1.5-flash"
+
+notion:
+  token: "secret_YOUR_NOTION_TOKEN_HERE"
+  database_id: "YOUR_DATABASE_ID"
+  page_title_prefix: "Financial Report"

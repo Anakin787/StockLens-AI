@@ -1,7 +1,9 @@
-yfinance
 pyyaml
-notion-client
+python-dotenv
 requests
+notion-client
 beautifulsoup4
 feedparser
 google-generativeai
+fastapi
+uvicorn

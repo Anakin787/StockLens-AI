@@ -19,3 +19,11 @@ config.yaml
 dist/
 build/
 *.egg-info/
+
+# Secrets / local state
+.env
+.toss_token.json
+.toss_token.json.lock
+*.db
+*.sqlite3
+KILL_SWITCH
