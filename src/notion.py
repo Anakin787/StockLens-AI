@@ -3,6 +3,17 @@ from decimal import Decimal
 
 from notion_client import Client
 
+#: Property names used when the report target is a database.
+TITLE_PROP = "Report"
+DATE_PROP = "Date"
+
+#: Columns a database target must have. Only checked for diagnostics -
+#: a page target has no properties beyond its title.
+REQUIRED_PROPS_HINT = {TITLE_PROP: "title", DATE_PROP: "date"}
+
+PARENT_DATABASE = "database"
+PARENT_PAGE = "page"
+
 
 def _fmt_krw(value):
     if value is None:
@@ -24,24 +35,95 @@ def _fmt_signed(value):
     return f"{amount:+,} KRW"
 
 
+def resolve_parent(client, target_id):
+    """Work out whether ``target_id`` is a database or an ordinary page.
+
+    Notion's UI gives both the same style of URL, and only a database link
+    carries a ``?v=`` view parameter - which is easy to lose when copying.
+    Probing here means either kind of link works, instead of a page id
+    failing with a 404 that reads exactly like a missing integration
+    connection.
+
+    Returns (kind, title) or (None, error message).
+    """
+    from notion_client.errors import APIResponseError
+
+    try:
+        database = client.databases.retrieve(database_id=target_id)
+        return PARENT_DATABASE, _plain_title(database.get("title"))
+    except APIResponseError as exc:
+        if getattr(exc, "code", "") not in ("object_not_found", "validation_error"):
+            raise
+
+    try:
+        page = client.pages.retrieve(page_id=target_id)
+    except APIResponseError:
+        return None, (
+            "해당 ID의 데이터베이스도 페이지도 찾을 수 없습니다. "
+            "ID가 맞는지, 그리고 그 페이지에서 [...] > Connections 로 "
+            "integration을 연결했는지 확인하세요."
+        )
+
+    title_prop = next(
+        (
+            value
+            for value in (page.get("properties") or {}).values()
+            if value.get("type") == "title"
+        ),
+        {},
+    )
+    return PARENT_PAGE, _plain_title(title_prop.get("title"))
+
+
+def _plain_title(rich_text):
+    return "".join(part.get("plain_text", "") for part in (rich_text or []))
+
+
 class NotionReporter:
-    def __init__(self, config):
+    def __init__(self, config, client=None):
         # Accepts either the AppConfig.notion dataclass or a raw mapping.
         notion_cfg = getattr(config, "notion", config)
         self.token = _get(notion_cfg, "token")
         self.database_id = _get(notion_cfg, "database_id")
-        self.client = Client(auth=self.token)
+        self.client = client or Client(auth=self.token)
         self.title_prefix = _get(notion_cfg, "page_title_prefix", "Financial Report")
 
-        # Hardcoded based on USER request: Date / Report
-        self.title_prop_name = "Report"  # The title property
-        self.date_prop_name = "Date"     # The date property
+        self.title_prop_name = TITLE_PROP
+        self.date_prop_name = DATE_PROP
+        self._parent_kind = None
+
+    def parent_kind(self):
+        """Cache the probe so a report run only checks once."""
+        if self._parent_kind is None:
+            kind, detail = resolve_parent(self.client, self.database_id)
+            if kind is None:
+                raise ValueError(detail)
+            self._parent_kind = kind
+        return self._parent_kind
+
+    def _parent(self):
+        if self.parent_kind() == PARENT_DATABASE:
+            return {"database_id": self.database_id}
+        return {"page_id": self.database_id}
+
+    def _properties(self, title):
+        """Databases carry Report/Date columns; a child page has only a title."""
+        if self.parent_kind() == PARENT_PAGE:
+            return {"title": {"title": [{"text": {"content": title}}]}}
+
+        properties = {self.title_prop_name: {"title": [{"text": {"content": title}}]}}
+        if self.date_prop_name:
+            properties[self.date_prop_name] = {
+                "date": {"start": datetime.now().replace(microsecond=0).isoformat()}
+            }
+        return properties
 
     def create_report(self, snapshot, news_data, ai_comment=None):
-        """Create a page in the Notion database. Returns {page_id, url, title}."""
-        date_str = datetime.now().replace(microsecond=0).isoformat()
-        title = f"{self.title_prefix} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        """Create a page under the configured database or page.
 
+        Returns {page_id, url, title}.
+        """
+        title = f"{self.title_prefix} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         children_blocks = []
 
         # 1. AI Analysis first - the reason to open the page at all.
@@ -84,15 +166,9 @@ class NotionReporter:
                         self._create_bullet_block(item["title"], item["link"])
                     )
 
-        page_properties = {
-            self.title_prop_name: {"title": [{"text": {"content": title}}]}
-        }
-        if self.date_prop_name:
-            page_properties[self.date_prop_name] = {"date": {"start": date_str}}
-
         page = self.client.pages.create(
-            parent={"database_id": self.database_id},
-            properties=page_properties,
+            parent=self._parent(),
+            properties=self._properties(title),
             children=children_blocks,
         )
         print(f"[Notion] Successfully created report: {title}")

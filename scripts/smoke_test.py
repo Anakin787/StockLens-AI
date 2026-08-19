@@ -43,11 +43,6 @@ def _warn(label, value):
     print(f"  [warn] {label}: {value}")
 
 
-#: Property names src/notion.py writes to. A database missing either of these
-#: rejects the page at creation time.
-REQUIRED_NOTION_PROPS = {"Report": "title", "Date": "date"}
-
-
 def _check_notion(config):
     """Verify the token, the database connection and the schema.
 
@@ -61,41 +56,39 @@ def _check_notion(config):
 
     try:
         from notion_client import Client
-        from notion_client.errors import APIResponseError
     except ImportError:
         _warn("notion", "notion-client 가 설치되지 않았습니다.")
         return
 
+    from src.notion import PARENT_DATABASE, REQUIRED_PROPS_HINT, resolve_parent
+
+    client = Client(auth=config.notion.token)
     try:
-        database = Client(auth=config.notion.token).databases.retrieve(
-            database_id=config.notion.database_id
-        )
-    except APIResponseError as exc:
-        if getattr(exc, "code", "") == "object_not_found":
-            _warn(
-                "notion",
-                "데이터베이스를 찾을 수 없습니다. DB 페이지의 [...] > Connections 에서 "
-                "integration 을 연결했는지, database_id 가 맞는지 확인하세요.",
-            )
-        elif getattr(exc, "code", "") == "unauthorized":
-            _warn("notion", "토큰이 유효하지 않습니다 (NOTION_TOKEN 확인).")
-        else:
-            _warn("notion", f"{exc}")
+        kind, detail = resolve_parent(client, config.notion.database_id)
+    except Exception as exc:  # noqa: BLE001 - surface whatever Notion said
+        _warn("notion", f"{exc}")
         return
 
-    title = "".join(part.get("plain_text", "") for part in database.get("title", []))
-    _ok("database", title or config.notion.database_id)
+    if kind is None:
+        _warn("notion", detail)
+        return
 
-    properties = database.get("properties") or {}
-    for name, expected in REQUIRED_NOTION_PROPS.items():
-        actual = (properties.get(name) or {}).get("type")
-        if actual == expected:
-            _ok(f"속성 {name}", expected)
-        elif actual:
-            _warn(f"속성 {name}", f"타입이 {actual} 입니다 ({expected} 이어야 함)")
-        else:
-            available = ", ".join(properties) or "(없음)"
-            _warn(f"속성 {name}", f"없습니다. 현재 속성: {available}")
+    if kind == PARENT_DATABASE:
+        _ok("database", detail or config.notion.database_id)
+        database = client.databases.retrieve(database_id=config.notion.database_id)
+        properties = database.get("properties") or {}
+        for name, expected in REQUIRED_PROPS_HINT.items():
+            actual = (properties.get(name) or {}).get("type")
+            if actual == expected:
+                _ok(f"속성 {name}", expected)
+            elif actual:
+                _warn(f"속성 {name}", f"타입이 {actual} 입니다 ({expected} 이어야 함)")
+            else:
+                available = ", ".join(properties) or "(없음)"
+                _warn(f"속성 {name}", f"없습니다. 현재 속성: {available}")
+    else:
+        _ok("page", detail or config.notion.database_id)
+        _ok("리포트 방식", "이 페이지의 하위 페이지로 생성됩니다")
 
 
 def main():
