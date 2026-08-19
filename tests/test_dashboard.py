@@ -200,3 +200,64 @@ def test_index_page_is_served(client):
 
     assert response.status_code == 200
     assert "StockLens AI" in response.text
+
+
+def test_holdings_expose_cost_basis_and_krw_profit(client):
+    """The invested amount must be visible next to the current value."""
+    positions = {p["symbol"]: p for p in client.get("/api/holdings").json()["positions"]}
+
+    krw = positions["005930"]
+    assert krw["cost_krw"] == 6500000.0
+    assert krw["value_krw"] == 7200000.0
+    assert krw["profit_krw"] == pytest.approx(700000.0)
+
+    # The USD position converts its cost at the purchase-time rate (1300),
+    # not today's, so cost_krw reflects what was actually spent.
+    usd = positions["AAPL"]
+    assert usd["cost_krw"] == pytest.approx(1553 * 1300)
+
+
+def test_position_costs_sum_to_the_portfolio_total(client):
+    data = client.get("/api/holdings").json()["positions"]
+    overview = client.get("/api/overview").json()
+
+    assert sum(p["cost_krw"] for p in data) == pytest.approx(overview["purchase_krw"])
+    assert sum(p["value_krw"] for p in data) == pytest.approx(overview["total_krw"])
+
+
+def test_rename_persists_and_shows_up_immediately(client):
+    """Renaming must bypass the 60s cache, or the edit looks like it failed."""
+    assert client.get("/api/holdings").json()["positions"][0]["name"] == "삼성전자"
+
+    response = client.put("/api/holdings/005930/name", json={"name": "삼성전자 (메인)"})
+    assert response.status_code == 200
+    assert response.json()["name"] == "삼성전자 (메인)"
+
+    names = {p["symbol"]: p["name"] for p in client.get("/api/holdings").json()["positions"]}
+    assert names["005930"] == "삼성전자 (메인)"
+
+
+def test_blank_name_clears_the_override(client):
+    client.put("/api/holdings/AAPL/name", json={"name": "애플"})
+    assert client.put("/api/holdings/AAPL/name", json={"name": "  "}).json()["name"] is None
+
+    names = {p["symbol"]: p["name"] for p in client.get("/api/holdings").json()["positions"]}
+    assert names["AAPL"] == "Apple Inc."   # back to the API-supplied name
+
+
+def test_rename_rejects_a_malformed_symbol(client):
+    assert client.put("/api/holdings/..%2Fetc/name", json={"name": "x"}).status_code in (404, 422)
+
+
+def test_rename_rejects_an_overlong_name(client):
+    assert client.put("/api/holdings/005930/name",
+                      json={"name": "x" * 200}).status_code == 422
+
+
+def test_overrides_survive_a_new_service_on_the_same_db(service):
+    """The Notion report reads the same overrides, so they must be in the DB."""
+    service.store.set_symbol_name("005930", "삼성전자 (메인)")
+
+    from src.store.repo import Store
+
+    assert Store(service.config.db_path).symbol_names()["005930"] == "삼성전자 (메인)"

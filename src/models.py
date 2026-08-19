@@ -119,6 +119,23 @@ class PortfolioSnapshot:
             return None
         return self.total_krw / self.exchange_rate
 
+    def evaluation_krw(self, position):
+        """Market value converted at today's rate."""
+        rate = self.exchange_rate if position.is_foreign else Decimal("1")
+        return position.evaluation * rate
+
+    def cost_krw(self, position):
+        """Purchase amount converted at the rate that applied when bought.
+
+        Falls back to today's rate when the position has no
+        ``avg_exchange_rate`` - matching the aggregator, so the per-row costs
+        add up to ``purchase_krw``.
+        """
+        if not position.is_foreign:
+            return position.cost_basis
+        rate = position.avg_exchange_rate or self.exchange_rate
+        return position.cost_basis * rate
+
     def allocation(self, by="market"):
         """Group market value in KRW for the dashboard's donut chart."""
         buckets = {}

@@ -24,7 +24,8 @@ const ALLOCATION_COLORS = {
   KR: "#00a572", US: "#2563eb", KRW: "#00a572", USD: "#2563eb", OTHER: "#8d90a0",
 };
 
-const state = { view: "overview", range: "3M", allocBy: "market", history: null };
+const state = { view: "overview", range: "3M", allocBy: "market", history: null,
+                editingName: false };
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -107,6 +108,8 @@ async function loadOverview() {
   $("kpi-total").textContent = fmtInt(data.total_krw);
   $("kpi-total-usd").textContent = data.total_usd_equivalent
     ? "≈ $" + fmtInt(data.total_usd_equivalent) : "—";
+  // Invested capital, converted at the purchase-time rate where one is known.
+  $("kpi-invested").textContent = fmtInt(data.purchase_krw) + " KRW";
 
   $("kpi-pnl").textContent = fmtSigned(data.profit_krw);
   $("kpi-pnl-wrap").className = "font-data-mono text-2xl font-bold tracking-tight " + toneClass(data.profit_krw);
@@ -358,6 +361,7 @@ function renderDonut(segments) {
 /* -------------------------------------------------------------- holdings */
 
 async function loadHoldings() {
+  if (state.editingName) return;   // never rebuild the table mid-edit
   const data = await getJSON("/api/holdings");
   const body = $("holdings-body");
   body.innerHTML = "";
@@ -365,7 +369,7 @@ async function loadHoldings() {
   $("holdings-count").textContent = `${positions.length} positions`;
 
   if (!positions.length) {
-    body.innerHTML = `<tr><td colspan="9" class="px-4 py-8 text-center text-on-surface-variant font-body-md">
+    body.innerHTML = `<tr><td colspan="11" class="px-4 py-8 text-center text-on-surface-variant font-body-md">
       보유 종목이 없습니다. 토스 계좌 보유분은 자동으로, 타 증권사 보유분은 config.yaml 의 portfolio.manual 로 표시됩니다.</td></tr>`;
     return;
   }
@@ -379,17 +383,86 @@ async function loadHoldings() {
       : "bg-surface-container-highest text-on-surface-variant border-outline-variant/50";
     row.innerHTML = `
       <td class="px-4 py-1.5 text-on-surface">${position.symbol || "—"}</td>
-      <td class="px-4 py-1.5 text-on-surface-variant font-body-md"></td>
+      <td class="name-cell px-4 py-1.5 font-body-md"></td>
       <td class="px-4 py-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded border ${badgeClass}">${isToss ? "토스" : "수기"}</span></td>
       <td class="px-4 py-1.5 text-right">${position.quantity}</td>
       <td class="px-4 py-1.5 text-right">${fmtPrice(position.last_price, position.currency)} <span class="text-on-surface-variant/50 text-[10px]">${position.currency}</span></td>
       <td class="px-4 py-1.5 text-right text-on-surface-variant">${fmtPrice(position.avg_price, position.currency)}</td>
+      <td class="px-4 py-1.5 text-right text-on-surface-variant">${fmtInt(position.cost_krw)}</td>
       <td class="px-4 py-1.5 text-right">${fmtInt(position.value_krw)}</td>
+      <td class="px-4 py-1.5 text-right ${toneClass(position.profit_krw)}">${fmtSigned(position.profit_krw)}</td>
       <td class="px-4 py-1.5 text-right ${toneClass(position.profit_rate)}">${fmtPct(position.profit_rate)}</td>
       <td class="px-4 py-1.5 text-right text-on-surface-variant">${(position.weight * 100).toFixed(1)}%</td>`;
-    row.querySelectorAll("td")[1].textContent = position.name;
+    makeNameEditable(row.querySelector(".name-cell"), position);
     body.appendChild(row);
   });
+}
+
+/* Toss reports name == symbol for some tickers (IONX, TSLL), so the name is
+ * click-to-edit. The override is stored server-side and also applies to the
+ * Notion report, so a ticker reads the same in both places. */
+function makeNameEditable(cell, position) {
+  if (!position.symbol) {           // static assets are named in config.yaml
+    cell.textContent = position.name;
+    cell.className += " text-on-surface-variant";
+    return;
+  }
+
+  const render = (name) => {
+    cell.textContent = name;
+    cell.title = "클릭해서 이름 수정";
+    cell.className =
+      "name-cell px-4 py-1.5 font-body-md text-on-surface-variant cursor-text " +
+      "hover:text-on-surface hover:underline decoration-dotted underline-offset-4";
+  };
+
+  const edit = () => {
+    state.editingName = true;
+    const current = cell.textContent;
+    const input = document.createElement("input");
+    input.value = current;
+    input.maxLength = 80;
+    input.className =
+      "w-full bg-surface-container-lowest border border-primary/60 rounded px-2 py-0.5 " +
+      "text-on-surface font-body-md outline-none";
+    cell.textContent = "";
+    cell.className = "name-cell px-2 py-1";
+    cell.appendChild(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      state.editingName = false;
+      const value = input.value.trim();
+      if (!save || value === current) { render(current); return; }
+      render(value || position.symbol);
+      try {
+        const res = await fetch(`/api/holdings/${encodeURIComponent(position.symbol)}/name`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: value }),
+        });
+        if (!res.ok) throw new Error(`${res.status}`);
+        const data = await res.json();
+        render(data.name || position.symbol);   // blank clears the override
+      } catch (err) {
+        render(current);                        // put the old name back
+        showError(`이름 저장 실패: ${err}`);
+      }
+    };
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") finish(true);
+      if (event.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+  };
+
+  render(position.name);
+  cell.addEventListener("click", () => { if (!cell.querySelector("input")) edit(); });
 }
 
 /* --------------------------------------------------------------- reports */

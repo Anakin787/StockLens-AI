@@ -10,7 +10,7 @@ from src.analyst import Analyst
 from src.config import load_config
 from src.news import NewsFetcher
 from src.notion import NotionReporter
-from src.pipeline import PortfolioService
+from src.pipeline import PortfolioService, apply_name_overrides
 from src.store.repo import Store
 from src.toss.errors import TossError
 
@@ -23,11 +23,16 @@ def run():
     # 1. Portfolio: Toss account (automatic) + manual entries for holdings
     #    kept at other brokers, priced through the Toss market data API.
     print(">>> Fetching portfolio (Toss Open API)...")
+    store = Store(config.db_path)
     service = PortfolioService(config)
     try:
         snapshot = service.snapshot()
     finally:
         service.close()
+
+    # Display names edited in the dashboard apply to the report too, so a
+    # ticker reads the same in both places.
+    apply_name_overrides(snapshot, store.symbol_names())
 
     print(
         f"Summary: {snapshot.total_krw:,.0f} KRW "
@@ -44,7 +49,6 @@ def run():
     # 2. Persist before anything that can fail on a third-party service. The
     #    Portfolio Value chart cannot be backfilled, so the snapshot is worth
     #    keeping even if Notion or Gemini is down.
-    store = Store(config.db_path)
     ts = store.save_snapshot(snapshot)
     print(f">>> Snapshot saved ({ts}, total {store.snapshot_count()} rows)")
 

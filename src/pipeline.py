@@ -4,6 +4,8 @@ Shared by main.py (report run) and the dashboard, so both read the portfolio
 the same way and, importantly, through the same cached OAuth token.
 """
 
+import dataclasses
+
 from src.models import SOURCE_TOSS
 from src.portfolio import HoldingsAggregator
 from src.sources.manual_source import ManualSource
@@ -24,6 +26,23 @@ WARNING_LABELS = {
     "volatilityInterruption": "변동성완화장치(VI) 발동",
     "preemptiveRight": "신주인수권",
 }
+
+
+def apply_name_overrides(snapshot, overrides):
+    """Swap in user-edited display names.
+
+    Applied to the snapshot rather than inside a source, so the Notion report
+    and the dashboard show the same name for a ticker.
+    """
+    if not overrides:
+        return snapshot
+    snapshot.positions = [
+        dataclasses.replace(position, name=overrides[position.symbol])
+        if position.symbol in overrides
+        else position
+        for position in snapshot.positions
+    ]
+    return snapshot
 
 
 def build_client(config, allow_write=False):

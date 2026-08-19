@@ -139,6 +139,34 @@ class Store:
         with self._connect() as connection:
             return connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
 
+    # ------------------------------------------------------ name overrides
+
+    def symbol_names(self):
+        """Return {symbol: display name} for every override."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT symbol, name FROM symbol_overrides"
+            ).fetchall()
+        return {row["symbol"]: row["name"] for row in rows}
+
+    def set_symbol_name(self, symbol, name):
+        """Store a display name, or clear it when name is blank."""
+        name = (name or "").strip()
+        with self._connect() as connection:
+            if not name:
+                connection.execute(
+                    "DELETE FROM symbol_overrides WHERE symbol = ?", (symbol,)
+                )
+                return None
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO symbol_overrides (symbol, name, updated_at)
+                VALUES (?,?,?)
+                """,
+                (symbol, name, datetime.now().replace(microsecond=0).isoformat()),
+            )
+        return name
+
     # --------------------------------------------------------------- reports
 
     def save_report(self, page_id, title=None, url=None, ai_comment=None, ts=None):

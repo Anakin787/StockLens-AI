@@ -147,6 +147,10 @@
             <p class="text-on-surface-variant text-label-caps uppercase tracking-wider mb-2">Total Assets</p>
             <h3 class="font-data-mono text-2xl text-on-surface font-bold tracking-tight"><span id="kpi-total">—</span> <span class="text-sm font-normal text-on-surface-variant">KRW</span></h3>
             <p class="text-on-surface-variant/70 font-data-mono text-xs mt-1" id="kpi-total-usd">—</p>
+            <p class="font-data-mono text-xs mt-1.5 pt-1.5 border-t border-outline-variant/30 flex justify-between">
+              <span class="text-on-surface-variant/60">매입</span>
+              <span class="text-on-surface-variant" id="kpi-invested">—</span>
+            </p>
           </div>
 
           <div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden">
@@ -234,7 +238,10 @@
       <!-- ============ HOLDINGS ============ -->
       <section data-view="holdings" hidden class="bg-surface-container rounded-lg border border-outline-variant/50 overflow-hidden">
         <div class="p-4 border-b border-outline-variant/50 flex items-center justify-between">
-          <h3 class="text-headline-md font-bold">Holdings</h3>
+          <div>
+            <h3 class="text-headline-md font-bold">Holdings</h3>
+            <p class="text-on-surface-variant/50 text-xs mt-0.5">종목명을 클릭하면 직접 수정할 수 있습니다</p>
+          </div>
           <span class="font-data-mono text-xs text-on-surface-variant" id="holdings-count"></span>
         </div>
         <div class="overflow-x-auto">
@@ -247,8 +254,10 @@
                 <th class="text-right px-4 py-2 font-bold">Qty</th>
                 <th class="text-right px-4 py-2 font-bold">Last</th>
                 <th class="text-right px-4 py-2 font-bold">Avg</th>
+                <th class="text-right px-4 py-2 font-bold">Cost (KRW)</th>
                 <th class="text-right px-4 py-2 font-bold">Value (KRW)</th>
-                <th class="text-right px-4 py-2 font-bold">P&amp;L</th>
+                <th class="text-right px-4 py-2 font-bold">P&amp;L (KRW)</th>
+                <th class="text-right px-4 py-2 font-bold">P&amp;L %</th>
                 <th class="text-right px-4 py-2 font-bold">Weight</th>
               </tr>
             </thead>

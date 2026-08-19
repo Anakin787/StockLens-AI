@@ -10,7 +10,7 @@ brokerage account, and it has no authentication.
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query
+from fastapi import Body, FastAPI, Path, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -47,6 +47,19 @@ def overview():
 @app.get("/api/holdings")
 def holdings():
     return get_service().holdings()
+
+
+@app.put("/api/holdings/{symbol}/name")
+def rename_holding(
+    symbol: str = Path(pattern=r"^[A-Za-z0-9.\-]{1,20}$"),
+    name: str = Body(embed=True, max_length=80),
+):
+    """Set the display name for a ticker; an empty name clears the override.
+
+    Cosmetic metadata only - it never touches the account. Toss reports
+    name == symbol for some tickers, which makes the table hard to read.
+    """
+    return {"symbol": symbol, "name": get_service().rename_symbol(symbol, name)}
 
 
 @app.get("/api/history")

@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS position_snapshots (
 CREATE INDEX IF NOT EXISTS idx_position_snapshots_ts
     ON position_snapshots (ts);
 
+-- User-supplied display names, edited inline in the dashboard.
+--
+-- Toss returns name == symbol for some tickers (IONX, TSLL, ...), which makes
+-- the holdings table hard to read. Overrides live here rather than in
+-- config.yaml so that editing them does not rewrite a hand-commented file.
+CREATE TABLE IF NOT EXISTS symbol_overrides (
+    symbol      TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 -- Notion report history, so the dashboard's Reports tab has real data in
 -- Phase 1 rather than waiting on the trading engine.
 CREATE TABLE IF NOT EXISTS reports (

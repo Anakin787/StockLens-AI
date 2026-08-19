@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-from src.pipeline import PortfolioService
+from src.pipeline import PortfolioService, apply_name_overrides
 from src.store.repo import Store
 from src.toss.errors import TossError
 
@@ -43,6 +43,10 @@ class _Cached:
             self.fetched_at = time.monotonic()
             return self.value, self.error
 
+    def invalidate(self):
+        with self.lock:
+            self.fetched_at = 0.0
+
 
 def _num(value):
     """JSON-safe number. Decimal is not serialisable and float loses won."""
@@ -62,8 +66,15 @@ class DashboardService:
 
     def _load_snapshot(self):
         snapshot = self.portfolio.snapshot()
+        apply_name_overrides(snapshot, self.store.symbol_names())
         self.last_sync = datetime.now()
         return snapshot
+
+    def rename_symbol(self, symbol, name):
+        """Set or clear a display name, then refresh so the UI shows it."""
+        stored = self.store.set_symbol_name(symbol, name)
+        self._snapshot.invalidate()
+        return stored
 
     def snapshot(self):
         return self._snapshot.get(self._load_snapshot)
@@ -106,8 +117,8 @@ class DashboardService:
         total = snapshot.total_krw or Decimal("1")
         positions = []
         for position in snapshot.positions:
-            rate = snapshot.exchange_rate if position.is_foreign else Decimal("1")
-            value_krw = position.evaluation * rate
+            value_krw = snapshot.evaluation_krw(position)
+            cost_krw = snapshot.cost_krw(position)
             positions.append(
                 {
                     "symbol": position.symbol,
@@ -118,6 +129,8 @@ class DashboardService:
                     "last_price": _num(position.last_price),
                     "avg_price": _num(position.avg_purchase_price),
                     "value_krw": _num(value_krw),
+                    "cost_krw": _num(cost_krw),
+                    "profit_krw": _num(value_krw - cost_krw),
                     "profit_loss": _num(position.profit_loss),
                     "profit_rate": _num(position.profit_rate),
                     "daily_profit_rate": _num(position.daily_profit_rate),
