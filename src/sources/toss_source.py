@@ -6,7 +6,7 @@ recomputing them. Recomputing would only introduce a second, slightly
 different answer to the same question.
 """
 
-from src.models import SOURCE_TOSS, Position, dig, to_decimal
+from src.models import SOURCE_TOSS, Position, dig, display_name, to_decimal
 from src.sources.base import HoldingSource
 
 
@@ -27,7 +27,7 @@ class TossSource(HoldingSource):
         currency = item.get("currency") or "KRW"
         return Position(
             symbol=item.get("symbol"),
-            name=item.get("name") or item.get("symbol") or "",
+            name=display_name(item),
             market_country=item.get("marketCountry") or "",
             currency=currency,
             quantity=to_decimal(item.get("quantity"), default=0),
@@ -42,4 +42,6 @@ class TossSource(HoldingSource):
             profit_rate_after_cost=to_decimal(dig(item, "profitLoss", "rateAfterCost")),
             daily_profit_loss=to_decimal(dig(item, "dailyProfitLoss", "amount")),
             daily_profit_rate=to_decimal(dig(item, "dailyProfitLoss", "rate")),
+            security_type=item.get("securityType"),
+            leverage_factor=to_decimal(item.get("leverageFactor")),
         )

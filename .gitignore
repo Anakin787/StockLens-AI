@@ -27,3 +27,6 @@ build/
 *.db
 *.sqlite3
 KILL_SWITCH
+
+# Scheduled run output
+logs/

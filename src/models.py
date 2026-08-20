@@ -26,6 +26,24 @@ def to_decimal(value, default=None):
         return default
 
 
+def display_name(item, symbol=None):
+    """Pick the most informative name Toss offers for a security.
+
+    For US listings Toss has no Korean name, so it echoes the ticker back in
+    ``name`` and puts the real one in ``englishName``. Taking ``name`` at face
+    value leaves the ticker standing alone everywhere - and an unfamiliar
+    ticker is exactly what the AI analyst then guesses at. IONX came back as
+    "IONX" and got read as IonQ common stock rather than the 2x leveraged ETF
+    it is. Korean names still win when there is one.
+    """
+    item = item or {}
+    symbol = symbol or item.get("symbol")
+    name = item.get("name")
+    if not name or name == symbol:
+        name = item.get("englishName") or name
+    return name or symbol or ""
+
+
 def dig(mapping, *keys, default=None):
     """Walk nested dicts safely - Toss nests amounts several levels deep."""
     current = mapping
@@ -66,9 +84,35 @@ class Position:
     #: applied when a foreign position was bought.
     avg_exchange_rate: Decimal | None = None
 
+    #: What kind of security this is, straight from the Toss master record.
+    #: "ETF", "STOCK", ... and the daily reset multiple for leveraged and
+    #: inverse products (negative means inverse).
+    security_type: str | None = None
+    leverage_factor: Decimal | None = None
+
     @property
     def is_foreign(self):
         return self.currency != "KRW"
+
+    @property
+    def instrument(self):
+        """A short description of what this security actually is.
+
+        The AI analyst reads tickers it may not know and will otherwise guess
+        the instrument from the name - reading a 2x ETF as the underlying
+        company's shares, and giving advice that suits shares rather than a
+        product that decays when the market chops sideways.
+        """
+        parts = []
+        factor = self.leverage_factor
+        if factor is not None and factor != 1:
+            if factor < 0:
+                parts.append(f"{abs(factor):g}x inverse (daily reset)")
+            else:
+                parts.append(f"{factor:g}x leveraged (daily reset)")
+        if self.security_type:
+            parts.append(self.security_type)
+        return " ".join(parts)
 
     @property
     def evaluation(self):

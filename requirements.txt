@@ -4,6 +4,6 @@ requests
 notion-client
 beautifulsoup4
 feedparser
-google-generativeai
+google-genai
 fastapi
 uvicorn

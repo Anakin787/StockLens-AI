@@ -66,6 +66,7 @@ Python 3.10 이상 (3.12에서 개발·검증).
 TOSS_CLIENT_ID=tsck_live_xxxxxxxxxxxx
 TOSS_CLIENT_SECRET=tssk_live_xxxxxxxxxxxx
 GOOGLE_AI_API_KEY=xxxxxxxxxxxx        # 선택. 없으면 AI 분석만 생략
+                                      # 발급: https://aistudio.google.com/apikey
 NOTION_TOKEN=ntn_xxxxxxxxxxxx         # 일일 리포트용
 NOTION_DATABASE_ID=2f1a8b3c4d5e...    # DB URL 의 ?v= 앞 32자
 ```
@@ -153,7 +154,9 @@ portfolio:
 python scripts/smoke_test.py
 ```
 
-`/accounts` → `/holdings` → `/prices` → `/exchange-rate` → `/market-calendar` → Notion 을 순서대로 점검합니다. GET만 사용하므로 주문이 나갈 수 없습니다.
+`/accounts` → `/holdings` → `/prices` → `/exchange-rate` → `/market-calendar` → Notion → Gemini 를 순서대로 점검합니다. 토스 호출은 GET만 사용하므로 주문이 나갈 수 없습니다.
+
+Gemini 단계는 토큰 한 개짜리 질문을 실제로 던져 봅니다. 키가 틀렸거나 모델명이 폐기되면 리포트 안에 사과 한 줄로만 남아 놓치기 쉬운데, 여기서는 소리 내어 실패합니다.
 
 **연속 2회 실행**해 보세요. 2회차에 토큰이 재발급되지 않아야 정상입니다.
 
@@ -168,6 +171,27 @@ python main.py          # 또는 run_report.bat
 Notion 페이지를 만들고 SQLite에 스냅샷 1행을 적재합니다. 순서상 **스냅샷 저장이 Notion·Gemini 호출보다 먼저**라, 외부 서비스가 죽어도 자산 이력은 남습니다.
 
 실패 시 **0이 아닌 exit code**를 반환합니다 (`2` = 토스/설정 오류, `3` = 그 외). 스케줄러에서 실패를 감지할 수 있습니다.
+
+### 자동 실행 (Windows 작업 스케줄러)
+
+```powershell
+schtasks /Query /TN "StockLens-AI Daily Report" /V /FO LIST   # 상태 확인
+schtasks /Run   /TN "StockLens-AI Daily Report"               # 지금 한 번 실행
+schtasks /Delete /TN "StockLens-AI Daily Report" /F           # 등록 해제
+```
+
+매일 **10:00**에 `run_report.bat --scheduled`를 실행합니다. 미국장 마감(서머타임 기준 06:00 KST) 이후이고, **PC를 쓰기 시작하는 09:00보다 뒤**입니다 — 이 작업은 `LogonType=Interactive`라 로그온 상태에서만 돌기 때문에, 사용 시간대 안에 트리거가 들어와야 그날 바로 실행됩니다.
+
+| 설정 | 이유 |
+|---|---|
+| `--scheduled` 인자 | 이 인자가 없으면 `run_report.bat`은 `pause`로 멈춘다. 스케줄러에서는 작업이 영원히 끝나지 않는다 |
+| StartWhenAvailable | PC가 꺼져 있어 놓친 실행을 다음 부팅 때 따라잡는다. 스냅샷은 소급 생성이 불가능하므로 하루를 통째로 잃지 않는 편이 낫다 |
+| MultipleInstances=IgnoreNew | 토스는 client당 유효 토큰이 1개다. 겹쳐 돌면 서로를 로그아웃시킨다 |
+| ExecutionTimeLimit 30분 | 외부 API가 응답하지 않을 때 무한정 매달리지 않는다 |
+
+로그는 `logs/report_YYYY-MM-DD.log`에 날짜별로 쌓입니다(gitignore 대상). 스케줄러가 기록하는 **Last Run Result**가 그대로 `main.py`의 exit code입니다.
+
+> 콘솔로 리다이렉트된 출력은 cp949를 따라 한글이 깨지므로, 배치 파일이 `PYTHONIOENCODING=utf-8`을 지정합니다.
 
 ### 대시보드
 

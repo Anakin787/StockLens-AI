@@ -1,6 +1,18 @@
+"""Gemini-backed portfolio commentary.
+
+Uses the ``google-genai`` SDK. The predecessor ``google-generativeai`` was
+retired by Google and printed a FutureWarning on every run.
+"""
+
 from decimal import Decimal
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+
+#: Gemini 3.x reasons before answering, and the default depth is more than a
+#: three-paragraph summary needs. "low" keeps the daily batch job cheap and
+#: quick; raise it in config.yaml if the commentary reads too shallow.
+DEFAULT_THINKING_LEVEL = "low"
 
 
 def _pct(rate):
@@ -15,28 +27,54 @@ class Analyst:
         if analyst_cfg is not None:
             self.api_key = analyst_cfg.api_key
             self.model_name = analyst_cfg.model
+            self.thinking_level = analyst_cfg.thinking_level
         else:  # raw mapping, kept for the module's standalone use
             google_ai = config.get("google_ai", {})
             self.api_key = google_ai.get("api_key")
-            self.model_name = google_ai.get("model", "gemini-1.5-flash")
+            self.model_name = google_ai.get("model", "gemini-3.7-flash")
+            self.thinking_level = google_ai.get(
+                "thinking_level", DEFAULT_THINKING_LEVEL
+            )
 
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel(self.model_name)
-        else:
-            self.model = None
+        self.client = genai.Client(api_key=self.api_key) if self.api_key else None
+
+    def _config(self):
+        """Build the request config.
+
+        Automatic function calling is off because this asks for prose and
+        declares no tools. Left on - the SDK default - it logs a "direct use
+        of AFC is not recommended" warning into every scheduled run's log,
+        about a feature that is not in use.
+
+        Thinking is omitted entirely rather than set to "minimal", which
+        Gemini 3.x rejects outright.
+        """
+        level = (self.thinking_level or "").strip().lower()
+        thinking = None
+        if level and level != "off":
+            thinking = types.ThinkingConfig(thinking_level=level)
+        return types.GenerateContentConfig(
+            thinking_config=thinking,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
+        )
 
     def analyze_portfolio(self, snapshot, news_data):
         """Analyze the portfolio and news using Gemini to generate insights."""
-        if not self.model:
+        if not self.client:
             return "AI Analyst is not configured (Missing API Key)."
 
         try:
             holdings_str = ""
             for position in snapshot.positions:
                 label = position.name or position.symbol
+                ticker = position.symbol or "n/a"
+                instrument = position.instrument or "security"
                 holdings_str += (
-                    f"- {label}: {position.quantity} shares, "
+                    f"- {label} [{ticker}] - {instrument}, "
+                    f"{position.market_country or 'n/a'}: "
+                    f"{position.quantity} shares, "
                     f"Profit: {_pct(position.profit_rate)}, "
                     f"Current Price: {position.last_price} {position.currency}\n"
                 )
@@ -49,6 +87,13 @@ class Analyst:
 
             prompt = f"""
             You are a professional financial analyst. Based on the following user portfolio and recent news, provide a brief strategic report.
+
+            Each holding below is annotated with what it actually is. Treat that
+            annotation as authoritative and do NOT infer the instrument from the
+            ticker or the name. In particular, a leveraged or inverse ETF resets
+            daily and loses value to volatility decay in a choppy or sideways
+            market - never analyse one as if it were shares in the underlying
+            company.
 
             User Portfolio Overview:
             - Total Assets: {snapshot.total_krw:,.0f} KRW
@@ -73,8 +118,15 @@ class Analyst:
             Keep the tone professional yet encouraging.
             """
 
-            response = self.model.generate_content(prompt)
-            return response.text
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=self._config(),
+            )
+            # .text is None when the model returns no text part - a safety
+            # block, for instance. Returning None would put "None" in the
+            # report, so say what happened instead.
+            return response.text or "AI Analysis returned no text."
 
         except Exception as e:
             print(f"Error generating AI analysis: {e}")

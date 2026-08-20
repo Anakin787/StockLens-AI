@@ -91,6 +91,42 @@ def _check_notion(config):
         _ok("리포트 방식", "이 페이지의 하위 페이지로 생성됩니다")
 
 
+def _check_analyst(config):
+    """Confirm the Gemini key and model actually answer.
+
+    A wrong key or a retired model name only shows up as a one-line apology
+    inside the finished report, which is easy to miss. Ask for one token here
+    instead so the failure is loud and attributable.
+    """
+    if not config.analyst.api_key:
+        _warn(
+            "GOOGLE_AI_API_KEY",
+            ".env 미설정 — 리포트는 생성되지만 AI 분석 섹션은 비어 있습니다.",
+        )
+        return
+
+    _ok("model", f"{config.analyst.model} (thinking={config.analyst.thinking_level})")
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=config.analyst.api_key)
+        reply = client.models.generate_content(
+            model=config.analyst.model,
+            contents="Reply with the single word: OK",
+        )
+        text = (reply.text or "").strip()
+        if text:
+            _ok("generate_content", text[:40])
+        else:
+            _warn("generate_content", "응답에 텍스트가 없습니다.")
+    except Exception as exc:  # noqa: BLE001 - a diagnostic reports, never raises
+        _warn("generate_content", f"{type(exc).__name__}: {exc}")
+        print(
+            "    키는 https://aistudio.google.com/apikey 에서 발급합니다.\n"
+            "    모델명이 폐기됐을 수도 있습니다 — config.yaml의 google_ai.model 확인.",
+        )
+
+
 def main():
     print("=== Toss Open API smoke test (read-only) ===\n")
 
@@ -152,6 +188,9 @@ def main():
 
         print("\n6) Notion")
         _check_notion(config)
+
+        print("\n7) Gemini (AI 애널리스트)")
+        _check_analyst(config)
 
         print("\n=== 모든 호출 성공 ===")
         return 0

@@ -11,7 +11,7 @@ as static entries carrying their own ``price``.
 
 import warnings
 
-from src.models import SOURCE_MANUAL, Position, to_decimal
+from src.models import SOURCE_MANUAL, Position, display_name, to_decimal
 from src.sources.base import HoldingSource
 
 
@@ -76,7 +76,7 @@ class ManualSource(HoldingSource):
 
         return Position(
             symbol=holding.symbol,
-            name=holding.name or master.get("name") or holding.symbol or "",
+            name=holding.name or display_name(master, holding.symbol),
             market_country=market_country,
             currency=currency,
             quantity=holding.qty,
@@ -88,4 +88,6 @@ class ManualSource(HoldingSource):
             profit_loss=profit_loss,
             profit_rate=profit_rate,
             avg_exchange_rate=holding.avg_exchange_rate,
+            security_type=master.get("securityType"),
+            leverage_factor=to_decimal(master.get("leverageFactor")),
         )

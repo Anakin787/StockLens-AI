@@ -214,6 +214,110 @@ def test_manual_positions_get_a_profit_rate():
     assert position.name == "Apple Inc."
 
 
+def test_us_listing_falls_back_to_the_english_name():
+    """Toss echoes the ticker in `name` for US listings, so `name` alone
+    leaves the bare ticker standing - which is what the AI analyst then
+    guesses at. The real name lives in `englishName`."""
+    from src.config import ManualHolding
+    from src.sources.manual_source import ManualSource
+
+    source = ManualSource(
+        FakeMarketApi(
+            prices={"IONX": {"symbol": "IONX", "lastPrice": "29.26", "currency": "USD"}},
+            stocks={
+                "IONX": {
+                    "symbol": "IONX",
+                    "name": "IONX",  # Toss echoes the ticker back
+                    "englishName": "DEFIANCE DAILY TARGET 2X LONG IONQ ETF",
+                    "marketCountry": "US",
+                }
+            },
+        ),
+        [ManualHolding(symbol="IONX", qty=Decimal("1"), avg_price=Decimal("30"))],
+    )
+
+    assert source.fetch()[0].name == "DEFIANCE DAILY TARGET 2X LONG IONQ ETF"
+
+
+def test_korean_name_still_wins_over_the_english_one():
+    from src.config import ManualHolding
+    from src.sources.manual_source import ManualSource
+
+    source = ManualSource(
+        FakeMarketApi(
+            prices={"005930": {"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}},
+            stocks={
+                "005930": {
+                    "symbol": "005930",
+                    "name": "삼성전자",
+                    "englishName": "Samsung Electronics Co Ltd",
+                    "marketCountry": "KR",
+                }
+            },
+        ),
+        [ManualHolding(symbol="005930", qty=Decimal("1"), avg_price=Decimal("70000"))],
+    )
+
+    assert source.fetch()[0].name == "삼성전자"
+
+
+def test_leveraged_etf_is_labelled_as_one():
+    """The instrument type must reach the report from the Toss master record,
+    not be left for the AI to guess from a ticker it may not know."""
+    from src.config import ManualHolding
+    from src.sources.manual_source import ManualSource
+
+    source = ManualSource(
+        FakeMarketApi(
+            prices={"IONX": {"symbol": "IONX", "lastPrice": "29.26", "currency": "USD"}},
+            stocks={
+                "IONX": {
+                    "symbol": "IONX",
+                    "englishName": "DEFIANCE DAILY TARGET 2X LONG IONQ ETF",
+                    "securityType": "ETF",
+                    "leverageFactor": "2",
+                    "marketCountry": "US",
+                }
+            },
+        ),
+        [ManualHolding(symbol="IONX", qty=Decimal("1"), avg_price=Decimal("30"))],
+    )
+    position = source.fetch()[0]
+
+    assert position.security_type == "ETF"
+    assert position.leverage_factor == Decimal("2")
+    assert position.instrument == "2x leveraged (daily reset) ETF"
+
+
+def test_instrument_renders_plain_and_inverse_products():
+    from src.models import SOURCE_MANUAL, Position
+
+    def make(**kw):
+        return Position(
+            symbol="X", name="X", market_country="US", currency="USD",
+            quantity=Decimal("1"), last_price=Decimal("1"),
+            avg_purchase_price=Decimal("1"), source=SOURCE_MANUAL, **kw
+        )
+
+    assert make(security_type="STOCK").instrument == "STOCK"
+    assert make().instrument == ""
+    # leverageFactor of 1 is not worth saying out loud
+    assert make(security_type="ETF", leverage_factor=Decimal("1")).instrument == "ETF"
+    assert (
+        make(security_type="ETF", leverage_factor=Decimal("-1")).instrument
+        == "1x inverse (daily reset) ETF"
+    )
+
+
+def test_display_name_degrades_to_the_symbol():
+    """No master entry at all must not produce an empty label."""
+    from src.models import display_name
+
+    assert display_name({}, "TSLL") == "TSLL"
+    assert display_name(None, "TSLL") == "TSLL"
+    assert display_name({"symbol": "TSLL", "name": "TSLL"}) == "TSLL"
+
+
 def test_manual_static_asset_uses_its_config_price():
     from src.config import ManualHolding
     from src.sources.manual_source import ManualSource

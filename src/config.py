@@ -123,10 +123,18 @@ class NotionConfig:
         )
 
 
+#: Google retired the gemini-1.5 line; 3.7 Flash is the current default model.
+DEFAULT_AI_MODEL = "gemini-3.7-flash"
+
+#: Reasoning depth for the daily commentary. See src/analyst.py for why "low".
+DEFAULT_THINKING_LEVEL = "low"
+
+
 @dataclass(frozen=True)
 class AnalystConfig:
     api_key: str | None = None
-    model: str = "gemini-1.5-flash"
+    model: str = DEFAULT_AI_MODEL
+    thinking_level: str = DEFAULT_THINKING_LEVEL
 
 
 @dataclass(frozen=True)
@@ -271,7 +279,8 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
     ai_key = os.environ.get("GOOGLE_AI_API_KEY") or raw_ai.get("api_key")
     analyst = AnalystConfig(
         api_key=None if is_placeholder(ai_key) else ai_key,
-        model=raw_ai.get("model", "gemini-1.5-flash"),
+        model=raw_ai.get("model") or DEFAULT_AI_MODEL,
+        thinking_level=raw_ai.get("thinking_level") or DEFAULT_THINKING_LEVEL,
     )
 
     return AppConfig(

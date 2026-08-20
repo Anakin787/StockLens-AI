@@ -52,7 +52,11 @@ news:
 
 google_ai:
   # Prefer GOOGLE_AI_API_KEY in .env over putting the key here.
-  model: "gemini-1.5-flash"
+  model: "gemini-3.7-flash"
+  # Reasoning depth: low / medium / high. "low" is plenty for a daily
+  # summary; Gemini 3.x thinks at "medium" by default, which costs more
+  # tokens and latency than this job needs. "off" omits the setting.
+  thinking_level: "low"
 
 notion:
   token: "secret_YOUR_NOTION_TOKEN_HERE"
