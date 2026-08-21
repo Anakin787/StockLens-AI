@@ -146,20 +146,29 @@ async function loadOverview() {
   renderAlerts(data.warnings || []);
 }
 
+// Extended-hours sessions are tradable but are not the main session, so they
+// get their own muted style rather than the full "Open" green.
+const SESSION_LABELS = { regular: "Open", day: "Day", pre: "Pre", after: "After" };
+
 function renderMarketChip(id, label, status) {
   const chip = $(id);
+  const dim = "text-on-surface-variant/50 border border-outline-variant/30 px-2 py-1 rounded";
   if (!status || !status.known) {
     chip.textContent = `${label}: —`;
-    chip.className = "text-on-surface-variant/50 border border-outline-variant/30 px-2 py-1 rounded";
+    chip.className = dim;
     return;
   }
-  if (status.open) {
-    chip.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-secondary-fixed-dim inline-block"></span> ${label}: Open`;
-    chip.className = "text-secondary-fixed-dim bg-secondary-container/10 border border-secondary-container/30 px-2 py-1 rounded flex items-center gap-1";
-  } else {
+  const text = SESSION_LABELS[status.session];
+  if (!text) {
     chip.textContent = `${label}: Closed`;
-    chip.className = "text-on-surface-variant/50 border border-outline-variant/30 px-2 py-1 rounded";
+    chip.className = dim;
+    return;
   }
+  const tone = status.session === "regular"
+    ? "text-secondary-fixed-dim bg-secondary-container/10 border-secondary-container/30"
+    : "text-tertiary-fixed-dim bg-tertiary-container/10 border-tertiary-container/30";
+  chip.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-current inline-block"></span> ${label}: ${text}`;
+  chip.className = `${tone} border px-2 py-1 rounded flex items-center gap-1`;
 }
 
 function renderAlerts(warnings) {
