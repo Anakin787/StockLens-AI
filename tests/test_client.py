@@ -136,6 +136,25 @@ def test_repeated_401_is_raised_not_looped(cache_path):
         client.get("/api/v1/holdings")
 
 
+def test_oauth_style_token_error_does_not_crash(cache_path):
+    """The token endpoint uses the standard flat OAuth envelope
+    (``{"error": "invalid_client", "error_description": ...}``), not Toss's
+    usual nested one - it must not be mistaken for a dict-shaped envelope."""
+    session = FakeSession()
+    session.token_responses = [
+        FakeResponse(
+            401,
+            {"error": "invalid_client", "error_description": "Client authentication failed: client_secret"},
+        )
+    ]
+    client = make_client(session, cache_path)
+
+    with pytest.raises(TossAuthError) as excinfo:
+        client.get("/api/v1/accounts")
+    assert excinfo.value.code == "invalid_client"
+    assert "client_secret" in excinfo.value.message
+
+
 def test_429_waits_for_retry_after(cache_path):
     session = FakeSession()
     session.responses = [

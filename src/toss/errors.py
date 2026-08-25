@@ -92,7 +92,14 @@ def error_from_response(status, payload, headers=None):
     headers = headers or {}
     envelope = {}
     if isinstance(payload, dict):
-        envelope = payload.get("error") or {}
+        raw_error = payload.get("error")
+        if isinstance(raw_error, dict):
+            envelope = raw_error
+        elif isinstance(raw_error, str):
+            # The OAuth token endpoint uses the standard flat envelope
+            # (``{"error": "invalid_client", "error_description": ...}``)
+            # instead of Toss's usual nested one.
+            envelope = {"code": raw_error, "message": payload.get("error_description")}
 
     code = envelope.get("code") or f"http-{status}"
     message = envelope.get("message") or "요청이 실패했습니다."
