@@ -199,7 +199,7 @@ def test_index_page_is_served(client):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "StockLens AI" in response.text
+    assert "M7 Terminal" in response.text
 
 
 def test_holdings_expose_cost_basis_and_krw_profit(client):
@@ -215,6 +215,22 @@ def test_holdings_expose_cost_basis_and_krw_profit(client):
     # not today's, so cost_krw reflects what was actually spent.
     usd = positions["AAPL"]
     assert usd["cost_krw"] == pytest.approx(1553 * 1300)
+
+
+def test_holdings_expose_fx_pnl_for_foreign_positions_with_a_purchase_rate(client):
+    positions = {p["symbol"]: p for p in client.get("/api/holdings").json()["positions"]}
+
+    # KRW position - no currency exposure, no FX P&L.
+    assert positions["005930"]["fx_pnl_krw"] is None
+
+    # AAPL: bought at 1300, today's rate is 1342.5 - the won weakened, so the
+    # unchanged 1553 USD cost basis is worth more in KRW now.
+    assert positions["AAPL"]["fx_pnl_krw"] == pytest.approx(1553 * (1342.5 - 1300))
+
+
+def test_overview_totals_the_fx_pnl_across_positions(client):
+    overview = client.get("/api/overview").json()
+    assert overview["fx_pnl_krw"] == pytest.approx(1553 * (1342.5 - 1300))
 
 
 def test_position_costs_sum_to_the_portfolio_total(client):

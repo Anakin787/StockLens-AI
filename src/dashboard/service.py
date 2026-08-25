@@ -101,6 +101,7 @@ class DashboardService:
             "daily_profit_rate": _num(snapshot.daily_profit_rate),
             "exchange_rate": _num(snapshot.exchange_rate),
             "has_unconverted_fx": snapshot.has_unconverted_fx,
+            "fx_pnl_krw": _num(snapshot.total_fx_pnl_krw),
             "buying_power": {
                 "KRW": _num(_decimal_or_none(buying_power.get("KRW"))),
                 "USD": _num(_decimal_or_none(buying_power.get("USD"))),
@@ -131,6 +132,7 @@ class DashboardService:
                     "value_krw": _num(value_krw),
                     "cost_krw": _num(cost_krw),
                     "profit_krw": _num(value_krw - cost_krw),
+                    "fx_pnl_krw": _num(snapshot.fx_pnl_krw(position)),
                     "profit_loss": _num(position.profit_loss),
                     "profit_rate": _num(position.profit_rate),
                     "daily_profit_rate": _num(position.daily_profit_rate),

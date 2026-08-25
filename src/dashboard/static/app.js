@@ -1,4 +1,4 @@
-/* StockLens AI dashboard.
+/* M7 Terminal dashboard.
  *
  * Charts are hand-rolled SVG rather than a charting library: the page must be
  * self-contained, and the two forms needed here (one area line, one donut) are
@@ -124,6 +124,15 @@ async function loadOverview() {
     (shownRate >= 0 ? "bg-secondary-container/20 text-secondary-fixed-dim" : "bg-tertiary-container/20 text-tertiary-fixed-dim");
   $("kpi-pnl-note").textContent = hasAfterCost
     ? "after fees & tax" : (data.has_unconverted_fx ? "환차손익 미반영" : "nominal");
+
+  // Only foreign positions with a known purchase-time rate contribute; when
+  // none do, hide the row instead of showing a misleading "0".
+  const hasFx = data.fx_pnl_krw !== null && data.fx_pnl_krw !== undefined;
+  $("kpi-fx-row").hidden = !hasFx;
+  if (hasFx) {
+    $("kpi-fx").textContent = fmtSigned(data.fx_pnl_krw) + " KRW";
+    $("kpi-fx").className = toneClass(data.fx_pnl_krw);
+  }
 
   $("kpi-day").textContent = fmtSigned(data.daily_profit_krw);
   $("kpi-day-wrap").className = "font-data-mono text-2xl font-bold tracking-tight " + toneClass(data.daily_profit_krw);
@@ -378,7 +387,7 @@ async function loadHoldings() {
   $("holdings-count").textContent = `${positions.length} positions`;
 
   if (!positions.length) {
-    body.innerHTML = `<tr><td colspan="11" class="px-4 py-8 text-center text-on-surface-variant font-body-md">
+    body.innerHTML = `<tr><td colspan="12" class="px-4 py-8 text-center text-on-surface-variant font-body-md">
       보유 종목이 없습니다. 토스 계좌 보유분은 자동으로, 타 증권사 보유분은 config.yaml 의 portfolio.manual 로 표시됩니다.</td></tr>`;
     return;
   }
@@ -401,6 +410,7 @@ async function loadHoldings() {
       <td class="px-4 py-1.5 text-right">${fmtInt(position.value_krw)}</td>
       <td class="px-4 py-1.5 text-right ${toneClass(position.profit_krw)}">${fmtSigned(position.profit_krw)}</td>
       <td class="px-4 py-1.5 text-right ${toneClass(position.profit_rate)}">${fmtPct(position.profit_rate)}</td>
+      <td class="px-4 py-1.5 text-right ${toneClass(position.fx_pnl_krw)}">${fmtSigned(position.fx_pnl_krw)}</td>
       <td class="px-4 py-1.5 text-right text-on-surface-variant">${(position.weight * 100).toFixed(1)}%</td>`;
     makeNameEditable(row.querySelector(".name-cell"), position);
     body.appendChild(row);
@@ -578,6 +588,15 @@ function init() {
     });
   });
   $("alert-bell").addEventListener("click", () => setView("overview"));
+
+  const glossary = $("glossary-overlay");
+  const closeGlossary = () => { glossary.hidden = true; };
+  $("glossary-btn").addEventListener("click", () => { glossary.hidden = false; });
+  $("glossary-close").addEventListener("click", closeGlossary);
+  glossary.addEventListener("click", (event) => { if (event.target === glossary) closeGlossary(); });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !glossary.hidden) closeGlossary();
+  });
   // Changing the hash is a same-document navigation, so deep links only work
   // if we listen for it.
   window.addEventListener("hashchange", () => setView(location.hash.slice(1) || "overview"));

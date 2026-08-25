@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>StockLens AI - Dashboard</title>
+<title>M7 Terminal - Dashboard</title>
 <link rel="icon" href="/static/favicon.ico" sizes="any"/>
 <link rel="icon" type="image/png" href="/static/favicon.png"/>
 <link rel="apple-touch-icon" href="/static/favicon.png"/>
@@ -75,7 +75,7 @@
     <div class="mb-8 px-2">
       <div class="flex items-center gap-3 mb-1">
         <img src="/static/favicon.png" alt="" width="32" height="32" class="rounded shrink-0"/>
-        <h1 class="text-primary text-xl font-bold leading-none">StockLens AI</h1>
+        <h1 class="text-primary text-xl font-bold leading-none">M7 Terminal</h1>
       </div>
       <p class="text-on-surface-variant font-data-mono text-xs uppercase tracking-wider">Quantitative Analysis</p>
     </div>
@@ -121,6 +121,9 @@
           class="bg-surface-container text-on-surface-variant/40 border border-outline-variant/40 px-4 py-1.5 rounded font-label-caps text-label-caps tracking-wide cursor-not-allowed">
           PAUSE TRADING
         </button>
+        <button class="text-on-surface-variant hover:text-on-surface transition-colors" id="glossary-btn" title="용어 설명">
+          <span class="material-symbols-outlined">help</span>
+        </button>
         <button class="text-on-surface-variant hover:text-on-surface transition-colors" id="alert-bell" title="경보">
           <span class="material-symbols-outlined">notifications</span>
         </button>
@@ -146,9 +149,9 @@
           <div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden">
             <p class="text-on-surface-variant text-label-caps uppercase tracking-wider mb-2">Total Assets</p>
             <h3 class="font-data-mono text-2xl text-on-surface font-bold tracking-tight"><span id="kpi-total">—</span> <span class="text-sm font-normal text-on-surface-variant">KRW</span></h3>
-            <p class="text-on-surface-variant/70 font-data-mono text-xs mt-1" id="kpi-total-usd">—</p>
+            <p class="h-5 flex items-center text-on-surface-variant/70 font-data-mono text-xs mt-1" id="kpi-total-usd">—</p>
             <p class="font-data-mono text-xs mt-1.5 pt-1.5 border-t border-outline-variant/30 flex justify-between">
-              <span class="text-on-surface-variant/60">매입</span>
+              <span class="text-on-surface-variant/60">Invested</span>
               <span class="text-on-surface-variant" id="kpi-invested">—</span>
             </p>
           </div>
@@ -156,10 +159,14 @@
           <div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden">
             <p class="text-on-surface-variant text-label-caps uppercase tracking-wider mb-2">Total P&amp;L</p>
             <h3 class="font-data-mono text-2xl font-bold tracking-tight" id="kpi-pnl-wrap"><span id="kpi-pnl">—</span> <span class="text-sm font-normal">KRW</span></h3>
-            <div class="flex items-center gap-2 mt-1">
+            <div class="h-5 flex items-center gap-2 mt-1">
               <span class="px-1.5 py-0.5 rounded font-data-mono text-[10px] font-bold" id="kpi-pnl-rate">—</span>
               <span class="text-on-surface-variant/70 font-data-mono text-[10px]" id="kpi-pnl-note">after fees &amp; tax</span>
             </div>
+            <p class="font-data-mono text-xs mt-1.5 pt-1.5 border-t border-outline-variant/30 flex justify-between" id="kpi-fx-row" hidden>
+              <span class="text-on-surface-variant/60">FX P&amp;L</span>
+              <span id="kpi-fx">—</span>
+            </p>
           </div>
 
           <div class="bg-surface-container p-4 rounded-lg border border-outline-variant/50 relative overflow-hidden">
@@ -258,6 +265,7 @@
                 <th class="text-right px-4 py-2 font-bold">Value (KRW)</th>
                 <th class="text-right px-4 py-2 font-bold">P&amp;L (KRW)</th>
                 <th class="text-right px-4 py-2 font-bold">P&amp;L %</th>
+                <th class="text-right px-4 py-2 font-bold">FX P&amp;L (KRW)</th>
                 <th class="text-right px-4 py-2 font-bold">Weight</th>
               </tr>
             </thead>
@@ -295,6 +303,40 @@
 
     </div>
   </main>
+</div>
+
+<!-- ============ GLOSSARY DIALOG ============ -->
+<div id="glossary-overlay" hidden class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="bg-surface-container-high border border-outline-variant rounded-lg max-w-lg w-full max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between p-4 border-b border-outline-variant/50 shrink-0">
+      <h3 class="text-headline-md font-bold text-on-surface">용어 설명</h3>
+      <button id="glossary-close" class="text-on-surface-variant hover:text-on-surface transition-colors" title="닫기">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <dl class="p-4 overflow-y-auto space-y-4 font-body-md text-sm">
+      <div><dt class="font-bold text-on-surface">Total Assets</dt>
+        <dd class="text-on-surface-variant mt-0.5">보유 종목 평가금액을 오늘 환율로 원화 환산한 합계입니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">Invested</dt>
+        <dd class="text-on-surface-variant mt-0.5">실제 매수에 들어간 원금입니다. 해외 종목은 매수 시점 환율(<code class="font-data-mono">avg_exchange_rate</code>)이 입력된 경우 그 환율로, 없으면 오늘 환율로 환산합니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">Total P&amp;L / nominal / after fees &amp; tax</dt>
+        <dd class="text-on-surface-variant mt-0.5">평가금액에서 매입원금을 뺀 손익입니다. <span class="font-data-mono text-xs">nominal</span>은 수수료·세금을 반영하지 않은 손익률, <span class="font-data-mono text-xs">after fees &amp; tax</span>는 토스가 수수료·세금까지 뺀 실질 손익률입니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">FX P&amp;L (환차손익)</dt>
+        <dd class="text-on-surface-variant mt-0.5">총 손익 중 주가 변동을 제외하고 환율 변동만으로 발생한 부분입니다. 매수 시점 환율이 입력된 해외 종목에만 표시됩니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">Today's P&amp;L</dt>
+        <dd class="text-on-surface-variant mt-0.5">전일 대비 오늘 하루 동안의 손익입니다. 토스 자동 조회 종목에만 제공됩니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">Cash Buying Power</dt>
+        <dd class="text-on-surface-variant mt-0.5">현재 매수에 사용할 수 있는 현금(원화·달러)입니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">P&amp;L (KRW) / P&amp;L %</dt>
+        <dd class="text-on-surface-variant mt-0.5">개별 보유 종목의 평가손익 금액과 수익률입니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">Weight</dt>
+        <dd class="text-on-surface-variant mt-0.5">전체 자산 대비 해당 종목이 차지하는 비중입니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">Source: 토스 / 수기</dt>
+        <dd class="text-on-surface-variant mt-0.5"><span class="font-data-mono text-xs">토스</span>는 토스 계좌에서 자동 조회한 보유분, <span class="font-data-mono text-xs">수기</span>는 다른 증권사 보유분을 <span class="font-data-mono text-xs">config.yaml</span>에 직접 입력한 것입니다.</dd></div>
+      <div><dt class="font-bold text-on-surface">leveraged / inverse (daily reset)</dt>
+        <dd class="text-on-surface-variant mt-0.5">기초지수의 하루 등락률을 매일 배수로(또는 반대 방향으로) 재설정하는 레버리지·인버스 ETF입니다. 횡보장에서도 가치가 깎이는 변동성 잠식 위험이 있어 기초자산 주식과 다르게 봐야 합니다.</dd></div>
+    </dl>
+  </div>
 </div>
 
 <script src="/static/app.js"></script>

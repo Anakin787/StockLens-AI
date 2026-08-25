@@ -68,6 +68,32 @@ def test_purchase_rate_makes_fx_gain_visible():
     assert with_rate.profit_rate > without_rate.profit_rate
 
 
+def test_fx_pnl_isolates_the_currency_move_from_the_price_move():
+    """Splitting P&L into a price effect (valued at today's rate) and an FX
+    effect (the rate move applied to the unchanged cost basis) must add up to
+    exactly the total KRW P&L, with no residual."""
+    position = usd_position(avg_exchange_rate=Decimal("1300"))
+    snapshot = _summarise([position], RATE)
+
+    # cost basis 1553 USD, rate moved from 1300 to 1342.5
+    assert snapshot.fx_pnl_krw(position) == Decimal("1553") * (RATE - Decimal("1300"))
+    assert snapshot.total_fx_pnl_krw == snapshot.fx_pnl_krw(position)
+
+    price_effect = (position.evaluation - position.cost_basis) * RATE
+    assert price_effect + snapshot.fx_pnl_krw(position) == snapshot.profit_krw
+
+
+def test_fx_pnl_is_none_without_a_purchase_rate_or_for_krw_positions():
+    with_rate = _summarise([usd_position(avg_exchange_rate=Decimal("1300"))], RATE)
+    without_rate = _summarise([usd_position()], RATE)
+    krw_only = _summarise([krw_position()], RATE)
+
+    assert with_rate.fx_pnl_krw(with_rate.positions[0]) is not None
+    assert without_rate.fx_pnl_krw(without_rate.positions[0]) is None
+    assert without_rate.total_fx_pnl_krw is None
+    assert krw_only.fx_pnl_krw(krw_only.positions[0]) is None
+
+
 def test_missing_purchase_rate_raises_the_badge():
     assert _summarise([usd_position()], RATE).has_unconverted_fx
     assert not _summarise(

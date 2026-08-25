@@ -180,6 +180,37 @@ class PortfolioSnapshot:
         rate = position.avg_exchange_rate or self.exchange_rate
         return position.cost_basis * rate
 
+    def fx_pnl_krw(self, position):
+        """The slice of P&L caused by the won moving, isolated from price.
+
+        Splitting ``evaluation_krw - cost_krw`` into a price effect and an FX
+        effect: valuing the price change at today's rate and the FX change
+        against the unchanged cost basis accounts for the total exactly,
+        with no residual -
+
+            (evaluation_native - cost_native) * today_rate      # price effect
+          + cost_native * (today_rate - avg_rate)                # fx effect
+          = evaluation_native * today_rate - cost_native * avg_rate
+          = total P&L in KRW
+
+        None for KRW positions and for foreign ones with no
+        ``avg_exchange_rate`` - same condition as ``has_unconverted_fx``,
+        since ``cost_krw`` already falls back to today's rate there and the
+        FX effect would be a meaningless zero.
+        """
+        if not position.is_foreign or not position.avg_exchange_rate:
+            return None
+        return position.cost_basis * (self.exchange_rate - position.avg_exchange_rate)
+
+    @property
+    def total_fx_pnl_krw(self):
+        """Sum of ``fx_pnl_krw`` across positions that report one, or None."""
+        values = [self.fx_pnl_krw(p) for p in self.positions]
+        values = [v for v in values if v is not None]
+        if not values:
+            return None
+        return sum(values, ZERO)
+
     def allocation(self, by="market"):
         """Group market value in KRW for the dashboard's donut chart."""
         buckets = {}
