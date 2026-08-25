@@ -1,4 +1,4 @@
-"""FastAPI app serving the StockLens dashboard.
+"""FastAPI app serving the M7 Terminal dashboard.
 
 Read-only in Phase 1. Bind to 127.0.0.1 - once Phase 2 wires the kill switch
 and order cancellation into this app, it becomes a control surface for a live
@@ -29,7 +29,7 @@ async def lifespan(_app):
         _service.close()
 
 
-app = FastAPI(title="StockLens AI", docs_url="/api/docs", lifespan=lifespan)
+app = FastAPI(title="M7 Terminal", docs_url="/api/docs", lifespan=lifespan)
 
 
 def get_service():

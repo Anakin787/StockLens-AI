@@ -1,5 +1,5 @@
 ---
-name: StockLens-AI Narrative
+name: M7 Terminal Narrative
 colors:
   surface: '#0b1326'
   surface-dim: '#0b1326'

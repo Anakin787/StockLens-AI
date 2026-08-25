@@ -1,4 +1,4 @@
-"""Configuration loading for StockLens-AI.
+"""Configuration loading for M7 Terminal.
 
 Credentials come from the environment first and ``config.yaml`` only as a
 fallback. From Phase 2 the same Toss credential carries order-placement

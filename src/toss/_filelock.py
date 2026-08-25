@@ -2,7 +2,7 @@
 
 Used to serialise access to the OAuth token cache. Toss keeps exactly one
 valid access token per client, and issuing a new one immediately invalidates
-the previous one - so two StockLens processes refreshing at the same time
+the previous one - so two M7 Terminal processes refreshing at the same time
 would log each other out. The lock makes "check the cache, refresh if stale,
 write it back" atomic across processes.
 """

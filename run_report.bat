@@ -1,5 +1,5 @@
 @echo off
-rem StockLens-AI daily report runner.
+rem M7 Terminal daily report runner.
 rem
 rem   run_report.bat              interactive; prints to the console and waits
 rem   run_report.bat --scheduled  Task Scheduler; logs to logs\ and exits

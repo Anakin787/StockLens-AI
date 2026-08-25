@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/logo.png" alt="StockLens AI" width="120"/>
+  <img src="assets/logo.png" alt="M7 Terminal" width="120"/>
 </p>
 
-<h1 align="center">StockLens-AI</h1>
+<h1 align="center">M7 Terminal</h1>
 
 <p align="center">
   토스증권 Open API 기반 포트폴리오 리포트 · 대시보드
@@ -175,10 +175,17 @@ Notion 페이지를 만들고 SQLite에 스냅샷 1행을 적재합니다. 순�
 ### 자동 실행 (Windows 작업 스케줄러)
 
 ```powershell
-schtasks /Query /TN "StockLens-AI Daily Report" /V /FO LIST   # 상태 확인
-schtasks /Run   /TN "StockLens-AI Daily Report"               # 지금 한 번 실행
-schtasks /Delete /TN "StockLens-AI Daily Report" /F           # 등록 해제
+schtasks /Query /TN "M7 Terminal Daily Report" /V /FO LIST   # 상태 확인
+schtasks /Run   /TN "M7 Terminal Daily Report"               # 지금 한 번 실행
+schtasks /Delete /TN "M7 Terminal Daily Report" /F           # 등록 해제
 ```
+
+> 이미 `StockLens-AI Daily Report`라는 이름으로 등록해 두셨다면 위 명령은 그 작업을 찾지 못합니다.
+> 기존 작업을 지우고 새 이름으로 다시 등록하세요:
+> ```powershell
+> schtasks /Delete /TN "StockLens-AI Daily Report" /F
+> schtasks /Create /TN "M7 Terminal Daily Report" /TR "<run_report.bat 전체 경로> --scheduled" /SC DAILY /ST 10:00
+> ```
 
 매일 **10:00**에 `run_report.bat --scheduled`를 실행합니다. 미국장 마감(서머타임 기준 06:00 KST) 이후이고, **PC를 쓰기 시작하는 09:00보다 뒤**입니다 — 이 작업은 `LogonType=Interactive`라 로그온 상태에서만 돌기 때문에, 사용 시간대 안에 트리거가 들어와야 그날 바로 실행됩니다.
 
@@ -216,7 +223,7 @@ uvicorn src.dashboard.api:app --host 127.0.0.1 --port 8000
 ## 프로젝트 구조
 
 ```text
-StockLens-AI/
+M7-Terminal/
 ├── main.py                  # 일일 리포트 실행
 ├── .env                     # 자격증명 (gitignore)
 ├── config.example.yaml      # 설정 템플릿
