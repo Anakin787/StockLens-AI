@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from decimal import Decimal
 
@@ -126,13 +127,14 @@ class NotionReporter:
         title = f"{self.title_prefix} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         children_blocks = []
 
-        # 1. AI Analysis first - the reason to open the page at all.
+        # 1. AI Analysis first - the reason to open the page at all. Gemini
+        #    replies in markdown (**bold**, numbered sections, bullets); Notion's
+        #    API takes rich-text spans instead, so the reply is parsed into
+        #    proper blocks rather than dumped into one block as a literal string
+        #    (which would show the raw "**" and "*" markers instead of styling).
         if ai_comment:
             children_blocks.append(self._create_heading_block("🧠 AI Analyst Insight"))
-            comment = ai_comment
-            if len(comment) > 2000:
-                comment = comment[:1997] + "..."
-            children_blocks.append(self._create_callout_block(comment))
+            children_blocks.extend(_markdown_to_blocks(ai_comment))
 
         # 2. Summary
         children_blocks.append(self._create_heading_block("📊 Asset Summary"))
@@ -249,6 +251,102 @@ class NotionReporter:
             "type": "bulleted_list_item",
             "bulleted_list_item": {"rich_text": rich_text},
         }
+
+
+_INLINE_MARKDOWN = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*")
+
+
+def _inline_rich_text(text):
+    """Turn ``**bold**`` / ``*italic*`` markdown spans into Notion rich_text.
+
+    Notion's API renders rich_text content literally - it does not parse
+    markdown the way typing into the editor does - so the AI's markdown
+    reply needs its emphasis markers converted into annotation objects.
+    """
+    spans = []
+    pos = 0
+    for match in _INLINE_MARKDOWN.finditer(text):
+        if match.start() > pos:
+            spans.append((text[pos:match.start()], {}))
+        if match.group(1) is not None:
+            spans.append((match.group(1), {"bold": True}))
+        else:
+            spans.append((match.group(2), {"italic": True}))
+        pos = match.end()
+    if pos < len(text):
+        spans.append((text[pos:], {}))
+
+    rich_text = []
+    for content, annotations in spans:
+        if not content:
+            continue
+        # Notion rejects a text object whose content exceeds 2000 characters.
+        for chunk_start in range(0, len(content), 2000):
+            chunk = content[chunk_start:chunk_start + 2000]
+            obj = {"type": "text", "text": {"content": chunk}}
+            if annotations:
+                obj["annotations"] = annotations
+            rich_text.append(obj)
+    if not rich_text:
+        rich_text = [{"type": "text", "text": {"content": ""}}]
+    return rich_text
+
+
+_NUMBERED_HEADING = re.compile(r"^(?:\*\*)?(\d+\.\s+.*?)(?:\*\*)?$")
+_BULLET_LINE = re.compile(r"^[*\-•]\s+(.*)")
+
+
+def _markdown_to_blocks(text):
+    """Parse a markdown reply into Notion blocks (headings/paragraphs/bullets).
+
+    Handles the shape the analyst prompt asks for: numbered section titles,
+    ``*``/``-`` bullets (one level of indentation nested as block children),
+    and inline ``**bold**``/``*italic*`` spans. Anything else falls back to
+    a plain paragraph so unexpected formatting still renders as text.
+    """
+    blocks = []
+    last_top_bullet = None
+    for raw_line in text.strip().splitlines():
+        if not raw_line.strip():
+            last_top_bullet = None
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        stripped = raw_line.strip()
+
+        bullet_match = _BULLET_LINE.match(stripped)
+        heading_match = _NUMBERED_HEADING.match(stripped)
+
+        if bullet_match:
+            block = {
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": _inline_rich_text(bullet_match.group(1))},
+            }
+            if indent >= 2 and last_top_bullet is not None:
+                last_top_bullet["bulleted_list_item"].setdefault("children", []).append(block)
+            else:
+                blocks.append(block)
+                last_top_bullet = block
+        elif heading_match:
+            blocks.append(
+                {
+                    "object": "block",
+                    "type": "heading_3",
+                    "heading_3": {"rich_text": _inline_rich_text(heading_match.group(1))},
+                }
+            )
+            last_top_bullet = None
+        else:
+            blocks.append(
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": _inline_rich_text(stripped)},
+                }
+            )
+            last_top_bullet = None
+    return blocks
 
 
 def _position_line(position):

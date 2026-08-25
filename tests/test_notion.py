@@ -16,6 +16,7 @@ from src.notion import (
     PARENT_DATABASE,
     PARENT_PAGE,
     NotionReporter,
+    _markdown_to_blocks,
     resolve_parent,
 )
 
@@ -171,3 +172,42 @@ def test_summary_includes_invested_amount(snapshot):
     text = str(pages.created["children"])
     assert "Invested" in text
     assert "18,050,856" in text
+
+
+def test_ai_comment_markdown_is_parsed_into_blocks(snapshot):
+    """A raw markdown string, dumped into one Notion text block, renders the
+    literal ``**``/``*`` markers instead of bold/italic - Notion's API does not
+    parse markdown the way typing into the editor does."""
+    pages = FakePages({"properties": {}})
+    comment = "**1. Market Outlook**\nSome text with **bold** and *italic* words."
+
+    NotionReporter(config_for(), client=FakeClient(pages=pages)).create_report(
+        snapshot, {}, ai_comment=comment
+    )
+
+    children = pages.created["children"]
+    types = [block["type"] for block in children]
+    assert "heading_3" in types  # "**1. Market Outlook**" -> a real heading
+    for block in children:
+        text = str(block)
+        assert "**" not in text
+        assert "*italic*" not in text
+
+
+def test_markdown_bold_and_italic_become_annotations():
+    blocks = _markdown_to_blocks("Plain **bold** and *italic* text.")
+
+    rich_text = blocks[0]["paragraph"]["rich_text"]
+    contents = [(span["text"]["content"], span.get("annotations", {})) for span in rich_text]
+    assert ("bold", {"bold": True}) in contents
+    assert ("italic", {"italic": True}) in contents
+
+
+def test_markdown_nested_bullets_become_children():
+    blocks = _markdown_to_blocks("* Top item\n    * Nested item")
+
+    assert len(blocks) == 1
+    top = blocks[0]["bulleted_list_item"]
+    assert top["rich_text"][0]["text"]["content"] == "Top item"
+    nested = top["children"][0]["bulleted_list_item"]
+    assert nested["rich_text"][0]["text"]["content"] == "Nested item"
