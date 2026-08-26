@@ -270,3 +270,58 @@ def test_modern_ntn_token_is_accepted(monkeypatch):
     monkeypatch.setenv("NOTION_DATABASE_ID", "2f1a8b3c4d5e6f7a8b9c0d1e2f3a4b5c")
 
     assert load_config("does-not-exist.yaml", load_env=False).notion.is_configured
+
+
+# ------------------------------------------------------------ trading (Phase 2)
+
+
+def test_trading_is_off_unless_enabled(tmp_path):
+    from src.config import _parse_trading
+
+    trading = _parse_trading({})
+    assert trading.enabled is False
+    assert trading.strategies == []
+    # Adding the trading code to the tree must not, by itself, start trading.
+
+
+def test_trading_limits_become_risk_limits_as_decimal(tmp_path):
+    from decimal import Decimal
+
+    from src.config import _parse_trading
+
+    trading = _parse_trading(
+        {
+            "enabled": True,
+            "limits": {
+                "max_daily_notional_krw": 3000000,
+                "max_position_weight": 0.15,
+                "max_orders_per_day": 4,
+            },
+        }
+    )
+    limits = trading.risk_limits()
+    assert limits.max_daily_notional_krw == Decimal("3000000")
+    assert limits.max_orders_per_day == 4
+    # Read through Decimal, not float - a float limit would put rounding
+    # drift back into a pipeline built to avoid it.
+    assert isinstance(limits.max_position_weight, Decimal)
+    # Unset limits keep their defaults rather than becoming None.
+    assert limits.strict is True
+
+
+def test_an_unknown_limit_name_is_an_error_not_a_no_op():
+    from src.config import _parse_trading
+    from src.toss.errors import TossConfigError
+
+    # A typo'd limit that is silently dropped reads, from the config file, as
+    # a limit that is in force.
+    with pytest.raises(TossConfigError):
+        _parse_trading({"limits": {"max_order_per_day": 3}})
+
+
+def test_a_non_numeric_limit_is_rejected():
+    from src.config import _parse_trading
+    from src.toss.errors import TossConfigError
+
+    with pytest.raises(TossConfigError):
+        _parse_trading({"limits": {"max_daily_notional_krw": "많이"}})

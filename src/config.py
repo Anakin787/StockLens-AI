@@ -137,6 +137,33 @@ class AnalystConfig:
     thinking_level: str = DEFAULT_THINKING_LEVEL
 
 
+DEFAULT_KILL_SWITCH_PATH = "KILL_SWITCH"
+
+
+@dataclass(frozen=True)
+class TradingConfig:
+    """Phase 2 settings. Off unless explicitly enabled.
+
+    ``enabled`` defaults to False so that adding the trading code to the tree
+    does not, by itself, make the daily job start placing orders. Turning it
+    on is a separate, deliberate edit.
+    """
+
+    enabled: bool = False
+    kill_switch_path: str = DEFAULT_KILL_SWITCH_PATH
+    #: ``module:Class`` paths, imported at run time. Strategies live outside
+    #: this repo's core - the engine does not ship an opinion about what to
+    #: trade.
+    strategies: list = field(default_factory=list)
+    limits: dict = field(default_factory=dict)
+
+    def risk_limits(self):
+        """Build a RiskLimits from the config, keeping every default."""
+        from src.execution.risk import RiskLimits
+
+        return RiskLimits(**self.limits) if self.limits else RiskLimits()
+
+
 @dataclass(frozen=True)
 class AppConfig:
     toss: TossConfig
@@ -145,6 +172,7 @@ class AppConfig:
     manual_holdings: list = field(default_factory=list)
     news_keywords: list = field(default_factory=list)
     db_path: str = DEFAULT_DB_PATH
+    trading: TradingConfig = field(default_factory=TradingConfig)
 
 
 def _decimal(value, field_name):
@@ -244,6 +272,58 @@ def _parse_manual_holdings(raw_portfolio):
     return holdings
 
 
+#: Limit names accepted under ``trading.limits``, and how to read each one.
+#: Money and ratios go through _decimal rather than float(): a limit read as
+#: a float would put rounding drift back into a pipeline built on Decimal.
+_RISK_LIMIT_FIELDS = {
+    "max_orders_per_day": int,
+    "max_daily_notional_krw": "decimal",
+    "max_position_weight": "decimal",
+    "high_value_threshold_krw": "decimal",
+    "allow_high_value": bool,
+    "amount_order_cutoff_minutes": int,
+    "strict": bool,
+}
+
+
+def _parse_trading(raw_trading):
+    raw_trading = raw_trading or {}
+    raw_limits = raw_trading.get("limits") or {}
+
+    unknown = set(raw_limits) - set(_RISK_LIMIT_FIELDS)
+    if unknown:
+        # A silently ignored limit reads as a limit that is in force.
+        raise TossConfigError(
+            f"trading.limits에 알 수 없는 항목이 있습니다: {sorted(unknown)}. "
+            f"사용 가능: {sorted(_RISK_LIMIT_FIELDS)}"
+        )
+
+    limits = {}
+    for name, kind in _RISK_LIMIT_FIELDS.items():
+        if name not in raw_limits:
+            continue
+        value = raw_limits[name]
+        if kind == "decimal":
+            limits[name] = _decimal(value, f"trading.limits.{name}")
+        elif kind is bool:
+            limits[name] = bool(value)
+        else:
+            try:
+                limits[name] = int(value)
+            except (TypeError, ValueError):
+                raise TossConfigError(
+                    f"'trading.limits.{name}' 값을 정수로 읽을 수 없습니다: {value!r}"
+                ) from None
+
+    return TradingConfig(
+        enabled=bool(raw_trading.get("enabled", False)),
+        kill_switch_path=raw_trading.get("kill_switch_path")
+        or DEFAULT_KILL_SWITCH_PATH,
+        strategies=[str(s) for s in (raw_trading.get("strategies") or []) if s],
+        limits=limits,
+    )
+
+
 def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
     """Build an AppConfig from .env plus config.yaml."""
     if load_env and load_dotenv is not None:
@@ -256,6 +336,7 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
     raw_portfolio = raw.get("portfolio") or {}
     raw_news = raw.get("news") or {}
     raw_report = raw.get("report") or {}
+    raw_trading = raw.get("trading") or {}
 
     client_id, client_secret = _resolve_credentials(raw_toss)
 
@@ -290,4 +371,5 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
         manual_holdings=_parse_manual_holdings(raw_portfolio),
         news_keywords=list(raw_news.get("keywords") or []),
         db_path=raw_report.get("db_path", DEFAULT_DB_PATH),
+        trading=_parse_trading(raw_trading),
     )

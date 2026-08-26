@@ -1,0 +1,187 @@
+"""Trading engine entry point. PAPER by default.
+
+Separate from main.py because the two batches fail differently: a report that
+does not run costs a chart point, and a trading run that does not run costs a
+trade - or, worse, runs twice. They also want different schedules.
+
+    python trade.py             # PAPER - reads the market, sends nothing
+    python trade.py --dry-run   # risk gate only, nothing written
+    python trade.py --live      # refused until the reconciler exists
+"""
+
+import argparse
+import sys
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+from src.config import load_config
+from src.execution.context import build_context
+from src.execution.executor import OrderExecutor
+from src.execution.risk import RiskGate
+from src.pipeline import PortfolioService
+from src.store.repo import Store
+from src.strategy.loader import load_strategies
+from src.toss.errors import TossError
+from src.toss.trading import TradingMode, build_trading_api
+
+EXIT_OK = 0
+EXIT_DISABLED = 1
+EXIT_TOSS_ERROR = 2
+EXIT_UNEXPECTED = 3
+EXIT_LIVE_BLOCKED = 4
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="M7 Terminal trading engine")
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="실계좌 주문. 현재 단계에서는 거부됩니다 (reconciler 미구현).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="리스크 게이트까지만 실행하고 DB에 아무것도 쓰지 않습니다.",
+    )
+    return parser.parse_args(argv)
+
+
+def _banner(mode, dry_run):
+    """State the mode before anything happens.
+
+    Design section 7 lists PAPER/LIVE confusion as a live risk, and the
+    cheapest mitigation is that every run says out loud which one it is.
+    """
+    label = "DRY-RUN (기록 없음)" if dry_run else mode.value.upper()
+    print("=" * 56)
+    print(f"  M7 Terminal · 매매 엔진 · 모드: {label}")
+    if mode is TradingMode.PAPER:
+        print("  주문은 전송되지 않습니다. 쓰기 권한 없는 클라이언트를 사용합니다.")
+    print("=" * 56)
+
+
+def run(argv=None):
+    args = parse_args(argv)
+
+    if args.live:
+        # Refused rather than merely discouraged. Without the reconciler
+        # ([9]) there is no way to find out what a submitted order actually
+        # did, and an unreconciled live order is an unbounded position.
+        print(
+            "ERROR: --live는 아직 열려 있지 않습니다.\n"
+            "       reconciler([9])와 OCO 손절이 붙기 전에는 체결 상태를 맞출 방법이 "
+            "없어\n       실주문을 내면 포지션을 추적할 수 없습니다. 설계 6절 [10] 참조.",
+            file=sys.stderr,
+        )
+        return EXIT_LIVE_BLOCKED
+
+    mode = TradingMode.PAPER
+    config = load_config()
+
+    if not config.trading.enabled:
+        print("매매가 비활성화되어 있습니다. config.yaml의 trading.enabled를 켜세요.")
+        return EXIT_DISABLED
+
+    strategies = load_strategies(config.trading)
+    if not strategies:
+        print("등록된 전략이 없습니다. config.yaml의 trading.strategies를 채우세요.")
+        return EXIT_DISABLED
+
+    _banner(mode, args.dry_run)
+    print(f">>> 전략 {len(strategies)}개: {', '.join(s.name for s in strategies)}")
+
+    store = Store(config.db_path)
+    service = PortfolioService(config)
+    try:
+        print(">>> 컨텍스트 수집 중 (시세·잔고·장 운영시간)...")
+        ctx = build_context(
+            service, store, kill_switch_path=config.trading.kill_switch_path
+        )
+        if ctx.kill_switch:
+            print("!!! KILL_SWITCH가 활성화되어 있습니다. 모든 신호가 거부됩니다.")
+        print(
+            f"    보유 {len(ctx.positions)}종목 · 시세 {len(ctx.prices)}건 · "
+            f"오늘 주문 {ctx.daily_usage.order_count}건"
+        )
+
+        signals = []
+        for strategy in strategies:
+            produced = strategy.evaluate(ctx) or []
+            print(f"    {strategy.name}: 신호 {len(produced)}건")
+            signals.extend(produced)
+
+        if not signals:
+            print(">>> 신호가 없습니다.")
+            return EXIT_OK
+
+        gate = RiskGate(config.trading.risk_limits())
+        approved, rejections = [], {}
+        for signal in signals:
+            decision = gate.evaluate(signal, ctx)
+            signal_id = None if args.dry_run else store.save_decision(decision)
+            if decision.approved:
+                approved.append((decision.intent, signal_id))
+            else:
+                rule = decision.rejection.rule
+                rejections.setdefault(rule, []).append(decision.rejection.detail)
+
+        _report_rejections(rejections)
+
+        if args.dry_run:
+            print(f">>> DRY-RUN: 승인 {len(approved)}건. 아무것도 기록하지 않았습니다.")
+            return EXIT_OK
+
+        if not approved:
+            return EXIT_OK
+
+        # Reuse the account sequence the service already resolved: ACCOUNT
+        # allows one request per second, and re-resolving it here would spend
+        # that budget to learn something we know.
+        trading = build_trading_api(
+            config, mode=mode, account_seq=service.account.resolve_account_seq()
+        )
+        executor = OrderExecutor(
+            trading, store, price_limits=ctx.price_limits
+        )
+        for intent, signal_id in approved:
+            record = executor.submit(intent, signal_id=signal_id)
+            note = " (중복, 재발주 안 함)" if record.duplicate else ""
+            print(
+                f"    {record.client_order_id}: {record.status}{note}"
+                f"{' · ' + record.detail if record.detail and not record.duplicate else ''}"
+            )
+        print(f">>> 신호 {len(signals)}건 · 승인 {len(approved)}건 · 거부 {len(signals) - len(approved)}건")
+    finally:
+        service.close()
+
+    return EXIT_OK
+
+
+def _report_rejections(rejections):
+    if not rejections:
+        return
+    print(">>> 거부:")
+    for rule, details in sorted(rejections.items()):
+        print(f"    [{rule}] {len(details)}건 - {details[0]}")
+
+
+def main(argv=None):
+    try:
+        return run(argv)
+    except TossError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_TOSS_ERROR
+    except Exception as exc:  # noqa: BLE001 - top level guard for the batch job
+        print(f"ERROR: 예기치 못한 오류 - {exc}", file=sys.stderr)
+        import traceback
+
+        traceback.print_exc()
+        return EXIT_UNEXPECTED
+
+
+if __name__ == "__main__":
+    sys.exit(main())

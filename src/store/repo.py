@@ -285,3 +285,72 @@ class Store:
         return DailyUsage(
             order_count=row["n"], notional_krw=total.quantize(Decimal("1"))
         )
+
+    def save_order(self, intent, signal_id=None, status="pending", mode="paper", ts=None):
+        """Record an order before it is sent.
+
+        Written ahead of the request on purpose: if the response never
+        arrives, the attempt still left a trace, and the next run finds the
+        client_order_id already taken rather than placing the order again.
+        """
+        ts = ts or datetime.now().replace(microsecond=0).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO orders (
+                    client_order_id, signal_id, ts, strategy, symbol, side,
+                    order_type, quantity, amount, price, currency,
+                    notional_krw, status, mode, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    intent.client_order_id,
+                    signal_id,
+                    ts,
+                    intent.strategy,
+                    intent.symbol,
+                    intent.side,
+                    intent.order_type,
+                    _text(intent.quantity),
+                    _text(intent.amount),
+                    _text(intent.limit_price),
+                    intent.currency,
+                    _text(intent.notional_krw),
+                    status,
+                    mode,
+                    ts,
+                ),
+            )
+        return ts
+
+    def update_order(self, client_order_id, **fields):
+        """Patch an order row. Unknown columns are refused, not ignored."""
+        allowed = {"order_id", "status", "error_code", "signal_id"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"수정할 수 없는 컬럼입니다: {sorted(unknown)}")
+        if not fields:
+            return None
+
+        fields["updated_at"] = datetime.now().replace(microsecond=0).isoformat()
+        assignments = ", ".join(f"{column} = ?" for column in fields)
+        with self._connect() as connection:
+            connection.execute(
+                f"UPDATE orders SET {assignments} WHERE client_order_id = ?",
+                (*fields.values(), client_order_id),
+            )
+        return fields["updated_at"]
+
+    def order_by_client_id(self, client_order_id):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM orders WHERE client_order_id = ?", (client_order_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def recent_orders(self, limit=50):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM orders ORDER BY ts DESC, rowid DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]

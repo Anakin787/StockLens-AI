@@ -43,6 +43,15 @@ class MarketApi:
                     merged[symbol] = item
         return merged
 
+    def price_limits(self, symbols):
+        """GET /api/v1/price-limits - MARKET_INFO (3 TPS). {symbol: item}.
+
+        Today's upper and lower bound for each symbol. A limit price outside
+        the band is rejected as ``price-out-of-range``; the risk gate checks
+        it up front so a bad price is reported as a bad price.
+        """
+        return self._by_symbol("/api/v1/price-limits", "MARKET_INFO", symbols)
+
     def exchange_rate(self, base_currency="USD", quote_currency="KRW"):
         """GET /api/v1/exchange-rate - MARKET_INFO (3 TPS)."""
         return self.client.get(

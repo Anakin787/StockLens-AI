@@ -200,6 +200,32 @@ schtasks /Delete /TN "M7 Terminal Daily Report" /F           # 등록 해제
 
 > 콘솔로 리다이렉트된 출력은 cp949를 따라 한글이 깨지므로, 배치 파일이 `PYTHONIOENCODING=utf-8`을 지정합니다.
 
+### 매매 엔진 (Phase 2 — PAPER)
+
+```bash
+python trade.py             # PAPER — 시장을 읽고, 아무것도 전송하지 않음
+python trade.py --dry-run   # 리스크 게이트까지만. DB에 기록 없음
+python trade.py --live      # 현재 거부됨 (아래 참고)
+```
+
+`config.yaml`의 `trading.enabled`를 켜고 `trading.strategies`에 직접 작성한 전략을 등록해야 동작합니다. 전략은 `Strategy`를 상속하고 `evaluate(ctx) -> list[Signal]`만 구현하며, **그 안에서 I/O를 하면 안 됩니다.**
+
+한 번 실행하면:
+
+1. 시세·잔고·매도가능수량·상하한가·장 운영시간을 읽어 컨텍스트를 만들고
+2. 전략이 신호를 내고
+3. 리스크 게이트가 신호마다 통과/거부를 판정해 **승인·거부 전부** `signals`/`rejections`에 기록하고
+4. 승인된 것만 `orders`에 `simulated`로 남습니다 (HTTP 전송 없음)
+
+> **`--live`는 아직 열려 있지 않습니다.** reconciler(체결 동기화)와 OCO 손절이 붙기 전에는 제출한 주문이 실제로 어떻게 됐는지 확인할 방법이 없고, 대사되지 않은 실주문은 추적 불가능한 포지션입니다.
+
+**긴급 정지**: 프로젝트 루트에 `KILL_SWITCH` 파일을 만들면 모든 발주가 즉시 중단됩니다. 코드 수정도 재시작도 필요 없습니다.
+
+```bash
+touch KILL_SWITCH     # 정지
+rm KILL_SWITCH        # 해제
+```
+
 ### 대시보드
 
 ```bash
@@ -212,7 +238,7 @@ uvicorn src.dashboard.api:app --host 127.0.0.1 --port 8000
 | **Holdings** | 종목별 수량·평단·현재가·손익·비중. **토스/수기 출처 배지** |
 | **Reports** | 생성된 Notion 리포트 이력 |
 | **Settings** | 설정 읽기전용 (자격증명 마스킹) |
-| **Trading** | Phase 2 예정 — 현재 비활성 |
+| **Trading** | Phase 3 예정 — 현재 비활성 |
 
 > ⚠️ **`127.0.0.1` 바인딩을 유지하세요.** 인증이 없고, Phase 2 이후에는 실계좌 제어 화면이 됩니다.
 
@@ -225,11 +251,12 @@ uvicorn src.dashboard.api:app --host 127.0.0.1 --port 8000
 ```text
 M7-Terminal/
 ├── main.py                  # 일일 리포트 실행
+├── trade.py                 # 매매 엔진 (PAPER 기본)
 ├── .env                     # 자격증명 (gitignore)
 ├── config.example.yaml      # 설정 템플릿
 ├── scripts/smoke_test.py    # 읽기전용 연결 점검
 ├── docs/ui/                 # 대시보드 디자인 원본 (DESIGN.md, mockup.html)
-├── tests/                   # 83개 — 네트워크·자격증명 불필요
+├── tests/                   # 195개 — 네트워크·자격증명 불필요
 └── src/
     ├── config.py            # .env 우선 자격증명, 심볼 정규화, v1 하위호환
     ├── toss/
@@ -241,7 +268,9 @@ M7-Terminal/
     ├── sources/             # toss_source(자동) · manual_source(config)
     ├── portfolio.py         # 소스 병합 → KRW 환산 스냅샷
     ├── models.py            # Position · PortfolioSnapshot (전 구간 Decimal)
-    ├── store/               # SQLite (스냅샷 · 포지션 · 리포트 이력)
+    ├── strategy/            # base.py(Signal · Strategy) · loader.py
+    ├── execution/           # risk.py(리스크 게이트) · executor.py · context.py · ids.py
+    ├── store/               # SQLite (스냅샷 · 포지션 · 리포트 · 신호 · 주문)
     ├── dashboard/           # FastAPI + 정적 프론트엔드
     ├── news.py              # Google News RSS
     ├── analyst.py           # Gemini 분석
@@ -251,7 +280,10 @@ M7-Terminal/
 ### 설계상 주의점
 
 - **금액은 전 구간 `Decimal`** — 토스 API가 모든 금액을 문자열로 주고, SQLite에도 `TEXT`로 저장합니다. `float`/`REAL`은 원 단위 오차가 누적됩니다.
-- **주문 엔드포인트는 구조적으로 차단** — `TossClient`는 `allow_write=False`가 기본이며, GET 외의 메서드는 `TossWriteBlockedError`를 던집니다. Phase 2의 트레이딩 모듈만 `allow_write=True` 클라이언트를 생성합니다.
+- **주문 엔드포인트는 구조적으로 차단** — `TossClient`는 `allow_write=False`가 기본이며, GET 외의 메서드는 `TossWriteBlockedError`를 던집니다. `src/toss/trading.py`만 `allow_write=True` 클라이언트를 생성하고, **PAPER 모드에서는 그것조차 하지 않습니다** — 읽기 전용 클라이언트를 쥐므로 버그로 `place_order`가 호출돼도 POST가 물리적으로 나갈 수 없습니다.
+- **전략은 네트워크에 닿을 수 없다** — `Strategy`는 client·store·config를 받지 않습니다. 실수로 주문을 낼 수 없고, 테스트와 운영에서 다르게 동작할 수도 없습니다. 같은 `evaluate`를 과거 컨텍스트에 흘리면 그게 백테스트입니다.
+- **리스크 게이트는 I/O를 하지 않는다** — 잔고·장운영시간·오늘 사용량은 `src/execution/context.py`가 읽어서 컨텍스트에 실어줍니다. 모든 규칙이 인자의 함수라 브로커를 목킹하지 않고 테스트합니다.
+- **조회 실패는 통과가 아니라 거부** — 컨텍스트 빌더는 조회에 실패한 필드를 비워두고, `strict` 모드가 그것을 "확인 불가"로 읽어 거부합니다. 읽기 실패가 허용 범위를 넓히는 일은 없습니다.
 - **대시보드는 서버측 캐시 필수** — `ACCOUNT` 그룹이 **1 TPS**라 브라우저 탭마다 API를 호출하면 즉시 429입니다. 모든 탭이 서버가 소유한 캐시 하나를 공유합니다.
 
 ---

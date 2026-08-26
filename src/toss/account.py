@@ -81,3 +81,22 @@ class AccountApi:
             params={"currency": currency},
             account_seq=self.resolve_account_seq(),
         )
+
+    def sellable_quantity(self, symbol):
+        """GET /api/v1/sellable-quantity - ORDER_INFO (6 TPS).
+
+        How many shares can actually be sold right now, which is not the same
+        as how many are held: shares bought today, lent out or pledged are
+        excluded. Checking this before a sell is what stops the risk gate
+        learning about it from a 422.
+
+        Note the peak restriction - ORDER_INFO drops to 3 TPS between 09:00
+        and 09:10 - so callers should read this once per symbol per run and
+        cache it rather than polling.
+        """
+        return self.client.get(
+            "/api/v1/sellable-quantity",
+            group="ORDER_INFO",
+            params={"symbol": symbol},
+            account_seq=self.resolve_account_seq(),
+        )

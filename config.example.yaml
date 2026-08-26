@@ -62,3 +62,33 @@ notion:
   token: "secret_YOUR_NOTION_TOKEN_HERE"
   database_id: "YOUR_DATABASE_ID"
   page_title_prefix: "Financial Report"
+
+# ---------------------------------------------------------------- 매매 (Phase 2)
+#
+# 기본은 꺼짐입니다. 매매 코드가 트리에 있다는 사실만으로 주문이 나가지
+# 않도록, 켜는 것은 별도의 명시적인 편집이어야 합니다.
+trading:
+  enabled: false
+
+  # 이 파일이 존재하면 모든 발주가 즉시 중단됩니다. 코드 수정도, 재시작도,
+  # 어딘가에 로그인할 수 있는 상태도 필요 없습니다.
+  kill_switch_path: "KILL_SWITCH"
+
+  # 직접 작성한 전략을 module:Class 로 지정합니다. Strategy를 상속해야 하고,
+  # evaluate(ctx) -> list[Signal] 안에서 I/O를 하면 안 됩니다 — 그 순수성이
+  # 백테스트의 전제입니다.
+  strategies: []
+  # - src.strategy.my_strategy:MyStrategy
+
+  limits:
+    max_orders_per_day: 10              # 일일 주문 건수
+    max_daily_notional_krw: 5000000     # 일일 누적 주문금액
+    max_position_weight: 0.20           # 종목당 최대 비중 (주문 "후" 기준)
+
+    # 1억 이상 주문은 confirmHighValueOrder가 필요합니다. 자동으로 켜지
+    # 않습니다 — 켤 수 있는 봇은 버그 하나 거리에 있습니다.
+    allow_high_value: false
+
+    # 검증할 데이터가 없을 때(시세·캘린더·주문가능금액 조회 실패)의 태도.
+    # true면 거부합니다. 확인하지 못한 주문은 안전한 주문이 아닙니다.
+    strict: true

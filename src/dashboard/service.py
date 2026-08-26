@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from src.pipeline import PortfolioService, apply_name_overrides
 from src.store.repo import Store
+from src.toss.calendar import live_session
 from src.toss.errors import TossError
 
 #: Seconds each kind of data stays fresh. Holdings move slowly enough that a
@@ -233,24 +234,12 @@ def _allocation_label(key, by):
     return {"KR": "KRX (Domestic)", "US": "US (Foreign)"}.get(key, key or "Other")
 
 
-#: Calendar keys that denote a tradable session, mapped to the kind reported
-#: to the UI. Ordered by precedence: the windows overlap at the boundary (KR
-#: afterMarket starts the minute regularMarket ends), and the more significant
-#: session should win.
-_SESSION_KINDS = (
-    ("regularMarket", "regular"),
-    ("dayMarket", "day"),
-    ("preMarket", "pre"),
-    ("afterMarket", "after"),
-)
-
-
 def _market_status(status):
     """Reduce the calendar payload to the live session per market."""
     result = {}
     for country in ("KR", "US"):
         calendar = (status or {}).get(country)
-        session = _live_session(calendar)
+        session = live_session(calendar)
         result[country] = {
             # "open" stays regular-session-only so anything reading it keeps
             # meaning the main session; extended hours are reported via
@@ -260,62 +249,3 @@ def _market_status(status):
             "known": calendar is not None,
         }
     return result
-
-
-def _live_session(calendar):
-    """Which session is live right now: regular/day/pre/after, or None.
-
-    The calendar shape varies by market and nests sessions arbitrarily deep
-    (KR wraps them in "integrated"; a US session can start on
-    previousBusinessDay and still be live now in KST), so this recurses
-    through the whole tree rather than assuming a fixed layout.
-    """
-    if not calendar:
-        return None
-
-    now = datetime.now().astimezone()
-    found = set()
-
-    def scan(node):
-        if not isinstance(node, (dict, list)):
-            return
-        if isinstance(node, list):
-            for item in node:
-                scan(item)
-            return
-        for key, value in node.items():
-            if isinstance(value, dict):
-                kind = dict(_SESSION_KINDS).get(key)
-                if kind and _contains(value, now):
-                    found.add(kind)
-            scan(value)
-
-    scan(calendar)
-
-    for _, kind in _SESSION_KINDS:
-        if kind in found:
-            return kind
-    return None
-
-
-def _contains(session, now):
-    """True when ``now`` falls inside this session's window."""
-    start = _parse_dt(
-        session.get("startTime") or session.get("startDateTime") or session.get("start")
-    )
-    end = _parse_dt(
-        session.get("endTime") or session.get("endDateTime") or session.get("end")
-    )
-    return bool(start and end and start <= now <= end)
-
-
-def _parse_dt(value):
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
-    return parsed
