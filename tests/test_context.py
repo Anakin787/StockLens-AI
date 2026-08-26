@@ -94,9 +94,9 @@ class FakeService:
         return {"KR": CALENDAR, "US": None}
 
 
-def build(tmp_path, fail=(), **kwargs):
+def build(tmp_path, firestore_client, fail=(), **kwargs):
     service = FakeService(fail=fail, **kwargs)
-    store = Store(str(tmp_path / "c.db"))
+    store = Store(firestore_client)
     return build_context(service, store, now=NOW, kill_switch_path=str(tmp_path / "none"))
 
 
@@ -114,8 +114,8 @@ def signal():
 # ---------------------------------------------------------------- happy path
 
 
-def test_a_complete_context_passes_the_strict_gate(tmp_path):
-    ctx = build(tmp_path)
+def test_a_complete_context_passes_the_strict_gate(tmp_path, firestore_client):
+    ctx = build(tmp_path, firestore_client)
 
     assert ctx.prices["005930"] == Decimal("70000")
     assert ctx.buying_power == {"KRW": Decimal("5000000")}  # the None is dropped
@@ -127,23 +127,23 @@ def test_a_complete_context_passes_the_strict_gate(tmp_path):
     assert RiskGate(RiskLimits()).evaluate(signal(), ctx).approved
 
 
-def test_the_close_time_survives_into_the_session(tmp_path):
-    close = build(tmp_path).sessions["KR"].regular_close
+def test_the_close_time_survives_into_the_session(tmp_path, firestore_client):
+    close = build(tmp_path, firestore_client).sessions["KR"].regular_close
     assert close == datetime(2026, 8, 26, 15, 30, tzinfo=KST)
     # Aware on both sides, so the gate's cutoff comparison does not raise.
     assert close.tzinfo is not None and NOW.tzinfo is not None
 
 
-def test_a_market_with_no_calendar_is_simply_absent(tmp_path):
+def test_a_market_with_no_calendar_is_simply_absent(tmp_path, firestore_client):
     # US came back None; strict mode then refuses to trade it rather than
     # assuming it is open.
-    assert "US" not in build(tmp_path).sessions
+    assert "US" not in build(tmp_path, firestore_client).sessions
 
 
-def test_sellable_is_read_once_per_held_symbol(tmp_path):
+def test_sellable_is_read_once_per_held_symbol(tmp_path, firestore_client):
     # ORDER_INFO drops to 3 TPS at the open, so this must not be polled.
     service = FakeService()
-    store = Store(str(tmp_path / "c.db"))
+    store = Store(firestore_client)
     build_context(service, store, now=NOW, kill_switch_path=str(tmp_path / "none"))
     assert service.account.calls == ["005930"]
 
@@ -151,7 +151,7 @@ def test_sellable_is_read_once_per_held_symbol(tmp_path):
 # ------------------------------------------------- failures narrow, never widen
 
 
-def test_a_failed_lookup_leaves_the_field_absent_and_the_gate_rejects(tmp_path):
+def test_a_failed_lookup_leaves_the_field_absent_and_the_gate_rejects(tmp_path, firestore_client):
     cases = {
         "prices": "prices",
         "price_limits": "price-limits-unknown",
@@ -160,34 +160,34 @@ def test_a_failed_lookup_leaves_the_field_absent_and_the_gate_rejects(tmp_path):
     }
     gate = RiskGate(RiskLimits())
 
-    ctx = build(tmp_path, fail=["price_limits"])
+    ctx = build(tmp_path, firestore_client, fail=["price_limits"])
     assert ctx.price_limits == {}
     assert gate.evaluate(signal(), ctx).rejection.rule == cases["price_limits"]
 
-    ctx = build(tmp_path, fail=["calendar"])
+    ctx = build(tmp_path, firestore_client, fail=["calendar"])
     assert ctx.sessions == {}
     assert gate.evaluate(signal(), ctx).rejection.rule == cases["calendar"]
 
-    ctx = build(tmp_path, fail=["prices"])
+    ctx = build(tmp_path, firestore_client, fail=["prices"])
     assert ctx.prices == {}
 
 
-def test_missing_buying_power_is_dropped_rather_than_zeroed(tmp_path):
+def test_missing_buying_power_is_dropped_rather_than_zeroed(tmp_path, firestore_client):
     """Absent must not read as zero, and must not read as unlimited.
 
     Zero would look like "no cash" (a wrong but survivable answer); the real
     answer is "unknown", which strict mode turns into a refusal.
     """
-    ctx = build(tmp_path, buying_power={"KRW": None})
+    ctx = build(tmp_path, firestore_client, buying_power={"KRW": None})
     assert ctx.buying_power == {}
     rejection = RiskGate(RiskLimits()).evaluate(signal(), ctx).rejection
     assert rejection.rule == "buying-power-unknown"
 
 
-def test_the_kill_switch_file_is_picked_up(tmp_path):
+def test_the_kill_switch_file_is_picked_up(tmp_path, firestore_client):
     switch = tmp_path / "KILL_SWITCH"
     switch.write_text("")
-    service, store = FakeService(), Store(str(tmp_path / "c.db"))
+    service, store = FakeService(), Store(firestore_client)
     ctx = build_context(service, store, now=NOW, kill_switch_path=str(switch))
     assert ctx.kill_switch is True
     assert RiskGate(RiskLimits()).evaluate(signal(), ctx).rejection.rule == "kill-switch"

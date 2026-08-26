@@ -99,7 +99,6 @@ def app_config(tmp_path, **trading):
         toss=TossConfig(client_id="id", client_secret="secret"),
         notion=NotionConfig(token="", database_id=""),
         analyst=AnalystConfig(),
-        db_path=str(tmp_path / "trade.db"),
         trading=TradingConfig(
             enabled=True,
             kill_switch_path=str(tmp_path / "no-switch"),
@@ -110,7 +109,7 @@ def app_config(tmp_path, **trading):
 
 
 @pytest.fixture
-def wired(tmp_path, monkeypatch):
+def wired(tmp_path, monkeypatch, firestore_client):
     config = app_config(tmp_path)
     monkeypatch.setattr(trade, "load_config", lambda: config)
     monkeypatch.setattr(trade, "PortfolioService", FakeService)
@@ -130,10 +129,10 @@ def _pinned_context(original):
     return build
 
 
-def test_a_paper_run_records_a_simulated_order(wired, capsys):
+def test_a_paper_run_records_a_simulated_order(wired, firestore_client, capsys):
     assert trade.run([]) == trade.EXIT_OK
 
-    store = Store(wired.db_path)
+    store = Store(firestore_client)
     orders = store.recent_orders()
     assert len(orders) == 1
     assert (orders[0]["status"], orders[0]["mode"]) == ("simulated", "paper")
@@ -146,7 +145,9 @@ def test_a_paper_run_records_a_simulated_order(wired, capsys):
     assert "PAPER" in capsys.readouterr().out
 
 
-def test_a_rejected_signal_is_recorded_with_its_rule(tmp_path, monkeypatch, capsys):
+def test_a_rejected_signal_is_recorded_with_its_rule(
+    tmp_path, monkeypatch, capsys, firestore_client
+):
     config = app_config(tmp_path, limits={"max_orders_per_day": 0})
     monkeypatch.setattr(trade, "load_config", lambda: config)
     monkeypatch.setattr(trade, "PortfolioService", FakeService)
@@ -155,7 +156,7 @@ def test_a_rejected_signal_is_recorded_with_its_rule(tmp_path, monkeypatch, caps
 
     assert trade.run([]) == trade.EXIT_OK
 
-    store = Store(config.db_path)
+    store = Store(firestore_client)
     assert store.recent_orders() == []
     row = store.recent_signals()[0]
     assert row["outcome"] == "rejected"
@@ -163,10 +164,10 @@ def test_a_rejected_signal_is_recorded_with_its_rule(tmp_path, monkeypatch, caps
     assert "daily-order-limit" in capsys.readouterr().out
 
 
-def test_dry_run_writes_nothing(wired, capsys):
+def test_dry_run_writes_nothing(wired, firestore_client, capsys):
     assert trade.run(["--dry-run"]) == trade.EXIT_OK
 
-    store = Store(wired.db_path)
+    store = Store(firestore_client)
     assert store.recent_orders() == []
     assert store.recent_signals() == []
     assert "DRY-RUN" in capsys.readouterr().out

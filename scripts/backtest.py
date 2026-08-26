@@ -40,7 +40,6 @@ def parse_args(argv=None):
     parser.add_argument("--strategy", default=DEFAULT_STRATEGY)
     parser.add_argument("--contribution", type=int, default=750000, help="월 적립액(원)")
     parser.add_argument("--initial", type=int, default=1000000, help="초기 시드(원)")
-    parser.add_argument("--db-path", default=None)
     parser.add_argument(
         "--offline", action="store_true", help="캐시된 데이터만 사용 (네트워크 호출 없음)"
     )
@@ -83,9 +82,8 @@ def _print_report(label, result):
 def run(argv=None):
     args = parse_args(argv)
     config = load_config()
-    db_path = args.db_path or config.db_path
 
-    cache = BarCache(db_path)
+    cache = BarCache()
     source = YahooBarSource()
     loader = HistoryLoader(cache, source=source, offline=args.offline)
 

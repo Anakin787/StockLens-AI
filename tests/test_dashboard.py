@@ -4,9 +4,6 @@ Also covers the cache, which is a correctness requirement rather than an
 optimisation: the ACCOUNT rate limit group allows one request per second.
 """
 
-import os
-import tempfile
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -68,8 +65,7 @@ class StubClient:
 
 
 @pytest.fixture
-def service():
-    db = os.path.join(tempfile.mkdtemp(), "test.db")
+def service(firestore_client):
     config = AppConfig(
         toss=TossConfig(client_id="cid", client_secret="sec"),
         notion=NotionConfig(token="secret_real", database_id="db"),
@@ -78,7 +74,6 @@ def service():
             ManualHolding(symbol="AAPL", qty=Decimal("10"), avg_price=Decimal("155.3"),
                           avg_exchange_rate=Decimal("1300"))
         ],
-        db_path=db,
     )
     stub = StubClient()
     from src.pipeline import PortfolioService
@@ -87,7 +82,7 @@ def service():
     svc.config = config
     from src.store.repo import Store
 
-    svc.store = Store(db)
+    svc.store = Store(firestore_client)
     svc.portfolio = PortfolioService(config, client=stub)
     from src.dashboard.service import _Cached, TTL_MARKET_STATUS, TTL_PORTFOLIO
 
@@ -270,10 +265,10 @@ def test_rename_rejects_an_overlong_name(client):
                       json={"name": "x" * 200}).status_code == 422
 
 
-def test_overrides_survive_a_new_service_on_the_same_db(service):
-    """The Notion report reads the same overrides, so they must be in the DB."""
+def test_overrides_survive_a_new_service_on_the_same_db(service, firestore_client):
+    """The Notion report reads the same overrides, so they must be in Firestore."""
     service.store.set_symbol_name("005930", "삼성전자 (메인)")
 
     from src.store.repo import Store
 
-    assert Store(service.config.db_path).symbol_names()["005930"] == "삼성전자 (메인)"
+    assert Store(firestore_client).symbol_names()["005930"] == "삼성전자 (메인)"

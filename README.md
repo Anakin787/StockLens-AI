@@ -17,7 +17,7 @@
 ```
 토스 계좌 ─┐
            ├─→ 통합 포트폴리오 ─┬─→ Notion 리포트 (AI 분석 + 뉴스)
-config.yaml ┘  (KRW 환산)       ├─→ SQLite 스냅샷
+config.yaml ┘  (KRW 환산)       ├─→ Firestore 스냅샷
  (타 증권사)                     └─→ 대시보드 (자산 추이 · 배분 · 경보)
 ```
 
@@ -69,9 +69,23 @@ GOOGLE_AI_API_KEY=xxxxxxxxxxxx        # 선택. 없으면 AI 분석만 생략
                                       # 발급: https://aistudio.google.com/apikey
 NOTION_TOKEN=ntn_xxxxxxxxxxxx         # 일일 리포트용
 NOTION_DATABASE_ID=2f1a8b3c4d5e...    # DB URL 의 ?v= 앞 32자
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json  # Firestore 저장소
 ```
 
 교체를 잊으면 앱이 *"`.env`의 TOSS_CLIENT_ID가 아직 플레이스홀더입니다"* 라고 알려줍니다.
+
+### Firebase (Firestore) 설정
+
+스냅샷·시그널·주문·일봉 캐시 등 모든 영속 데이터는 Firestore에 저장됩니다.
+
+1. https://console.firebase.google.com 에서 프로젝트 생성 (또는 기존 GCP 프로젝트 사용)
+2. **Firestore Database** 활성화 (Native mode)
+3. 프로젝트 설정(톱니바퀴) → **서비스 계정** → **새 비공개 키 생성** → JSON 다운로드
+4. 다운로드한 JSON을 `secrets/` 아래(gitignore 대상)에 두고, 그 절대 경로를 위 `.env`의
+   `GOOGLE_APPLICATION_CREDENTIALS`에 지정
+
+이 파일은 은행 비밀번호와 동급으로 취급하세요 — 유출되면 Firebase 콘솔에서 해당 서비스
+계정 키를 즉시 삭제하고 새로 발급하면 됩니다.
 
 ### Notion 토큰 받기
 
@@ -168,7 +182,7 @@ Gemini 단계는 토큰 한 개짜리 질문을 실제로 던져 봅니다. 키�
 python main.py          # 또는 run_report.bat
 ```
 
-Notion 페이지를 만들고 SQLite에 스냅샷 1행을 적재합니다. 순서상 **스냅샷 저장이 Notion·Gemini 호출보다 먼저**라, 외부 서비스가 죽어도 자산 이력은 남습니다.
+Notion 페이지를 만들고 Firestore에 스냅샷 1건을 적재합니다. 순서상 **스냅샷 저장이 Notion·Gemini 호출보다 먼저**라, 외부 서비스가 죽어도 자산 이력은 남습니다.
 
 실패 시 **0이 아닌 exit code**를 반환합니다 (`2` = 토스/설정 오류, `3` = 그 외). 스케줄러에서 실패를 감지할 수 있습니다.
 
@@ -270,7 +284,7 @@ M7-Terminal/
     ├── models.py            # Position · PortfolioSnapshot (전 구간 Decimal)
     ├── strategy/            # base.py(Signal · Strategy) · loader.py
     ├── execution/           # risk.py(리스크 게이트) · executor.py · context.py · ids.py
-    ├── store/               # SQLite (스냅샷 · 포지션 · 리포트 · 신호 · 주문)
+    ├── store/               # Firestore (스냅샷 · 포지션 · 리포트 · 신호 · 주문)
     ├── dashboard/           # FastAPI + 정적 프론트엔드
     ├── news.py              # Google News RSS
     ├── analyst.py           # Gemini 분석
@@ -279,7 +293,7 @@ M7-Terminal/
 
 ### 설계상 주의점
 
-- **금액은 전 구간 `Decimal`** — 토스 API가 모든 금액을 문자열로 주고, SQLite에도 `TEXT`로 저장합니다. `float`/`REAL`은 원 단위 오차가 누적됩니다.
+- **금액은 전 구간 `Decimal`** — 토스 API가 모든 금액을 문자열로 주고, Firestore에도 문자열로 저장합니다. `float`/`REAL`은 원 단위 오차가 누적됩니다.
 - **주문 엔드포인트는 구조적으로 차단** — `TossClient`는 `allow_write=False`가 기본이며, GET 외의 메서드는 `TossWriteBlockedError`를 던집니다. `src/toss/trading.py`만 `allow_write=True` 클라이언트를 생성하고, **PAPER 모드에서는 그것조차 하지 않습니다** — 읽기 전용 클라이언트를 쥐므로 버그로 `place_order`가 호출돼도 POST가 물리적으로 나갈 수 없습니다.
 - **전략은 네트워크에 닿을 수 없다** — `Strategy`는 client·store·config를 받지 않습니다. 실수로 주문을 낼 수 없고, 테스트와 운영에서 다르게 동작할 수도 없습니다. 같은 `evaluate`를 과거 컨텍스트에 흘리면 그게 백테스트입니다.
 - **리스크 게이트는 I/O를 하지 않는다** — 잔고·장운영시간·오늘 사용량은 `src/execution/context.py`가 읽어서 컨텍스트에 실어줍니다. 모든 규칙이 인자의 함수라 브로커를 목킹하지 않고 테스트합니다.
@@ -303,7 +317,7 @@ pytest tests/ -v
 
 | Phase | 내용 | 상태 |
 |---|---|---|
-| **1. 리포트 + 대시보드** | 토스 API 조회 → Notion → SQLite → 대시보드 | ✅ 완료 |
+| **1. 리포트 + 대시보드** | 토스 API 조회 → Notion → Firestore → 대시보드 | ✅ 완료 |
 | **2. 자동매매** | 전략 엔진 · 리스크 게이트 · 조건주문(OCO) 손절 | 설계 완료 |
 | **3. 대시보드 확장** | 전략 성과 · 주문 이력 · 킬 스위치 | Phase 2 이후 |
 
@@ -316,7 +330,7 @@ pytest tests/ -v
 | 보유 수량·평단 | 국내만 자동 | ❌ 전량 수기 | ✅ 토스 계좌분 자동 |
 | 수수료·세금 반영 손익 | ❌ | ❌ | ✅ |
 | 전일 대비 손익 | ❌ | ❌ | ✅ |
-| 자산 추이 이력 | ❌ | ❌ | ✅ SQLite |
+| 자산 추이 이력 | ❌ | ❌ | ✅ Firestore |
 
 ---
 

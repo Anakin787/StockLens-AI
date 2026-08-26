@@ -31,7 +31,7 @@ def run():
     # 1. Portfolio: Toss account (automatic) + manual entries for holdings
     #    kept at other brokers, priced through the Toss market data API.
     print(">>> Fetching portfolio (Toss Open API)...")
-    store = Store(config.db_path)
+    store = Store()
     service = PortfolioService(config)
     try:
         snapshot = service.snapshot()

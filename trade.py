@@ -75,7 +75,7 @@ def _load_history(config, symbols):
     if not symbols:
         return {}
     try:
-        cache = BarCache(config.db_path)
+        cache = BarCache()
         loader = HistoryLoader(cache, source=YahooBarSource(), offline=False)
         end = date.today()
         start = end - timedelta(days=HISTORY_LOOKBACK_DAYS)
@@ -144,7 +144,7 @@ def run(argv=None):
     _banner(mode, args.dry_run)
     print(f">>> 전략 {len(strategies)}개: {', '.join(s.name for s in strategies)}")
 
-    store = Store(config.db_path)
+    store = Store()
     service = PortfolioService(config)
     try:
         universe_symbols = _strategy_symbols(strategies)

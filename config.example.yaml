@@ -7,9 +7,12 @@
 #   TOSS_CLIENT_ID=c_xxxxxxxxxxxx
 #   TOSS_CLIENT_SECRET=tssk_live_xxxxxxxxxxxx
 #   GOOGLE_AI_API_KEY=xxxxxxxxxxxx
+#   GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json
 #
 # From Phase 2 the Toss credential carries order-placement rights, so the
-# environment is the only place it should live.
+# environment is the only place it should live. All persistence (snapshots,
+# signals, orders, the daily-bar cache) lives in Firestore, reached through
+# the service account above - there is no db_path setting here anymore.
 
 toss:
   # Optional. Omit to use the first account returned by /api/v1/accounts.
@@ -41,9 +44,6 @@ portfolio:
     #   avg_price: 5000000
     #   price: 5400000
     #   currency: "KRW"
-
-report:
-  db_path: "stocklens.db"
 
 news:
   keywords:

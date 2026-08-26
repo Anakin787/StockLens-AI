@@ -21,7 +21,6 @@ except ImportError:  # dotenv is optional; env vars still work without it
 from src.toss.errors import TossConfigError
 
 DEFAULT_CONFIG_PATH = "config.yaml"
-DEFAULT_DB_PATH = "stocklens.db"
 DEFAULT_TOKEN_CACHE = ".toss_token.json"
 DEFAULT_BASE_URL = "https://openapi.tossinvest.com"
 
@@ -180,7 +179,6 @@ class AppConfig:
     analyst: AnalystConfig
     manual_holdings: list = field(default_factory=list)
     news_keywords: list = field(default_factory=list)
-    db_path: str = DEFAULT_DB_PATH
     trading: TradingConfig = field(default_factory=TradingConfig)
 
 
@@ -378,7 +376,6 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
     raw_ai = raw.get("google_ai") or {}
     raw_portfolio = raw.get("portfolio") or {}
     raw_news = raw.get("news") or {}
-    raw_report = raw.get("report") or {}
     raw_trading = raw.get("trading") or {}
 
     client_id, client_secret = _resolve_credentials(raw_toss)
@@ -413,6 +410,5 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
         analyst=analyst,
         manual_holdings=_parse_manual_holdings(raw_portfolio),
         news_keywords=list(raw_news.get("keywords") or []),
-        db_path=raw_report.get("db_path", DEFAULT_DB_PATH),
         trading=_parse_trading(raw_trading),
     )

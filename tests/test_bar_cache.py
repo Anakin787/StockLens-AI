@@ -52,8 +52,8 @@ class RaisingSource:
 
 
 @pytest.fixture
-def cache(tmp_path):
-    return BarCache(str(tmp_path / "bars.sqlite3"))
+def cache(firestore_client):
+    return BarCache(firestore_client)
 
 
 def test_decimal_round_trips_exactly_through_text(cache):

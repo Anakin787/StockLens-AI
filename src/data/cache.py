@@ -1,136 +1,109 @@
-"""SQLite cache for daily bars.
+"""Firestore cache for daily bars.
 
-Kept as its own connection helper rather than folded into
+Kept as its own client helper rather than folded into
 :class:`src.store.repo.Store` - historical bars are a concern the dashboard
 and the report pipeline never touch, and growing ``Store`` for them would mix
-two unrelated lifetimes into one class. It shares the same database file, so
-one ``--db-path`` still means one file for the whole app.
+two unrelated lifetimes into one class. It talks to the same Firestore
+project, so one set of Firebase credentials still means one place all app
+data lives.
 """
 
-import os
-import sqlite3
 from datetime import date
 
-from decimal import Decimal
+from google.cloud import firestore
+
+#: Firestore caps a single batch at 500 writes.
+_BATCH_SIZE = 500
 
 from src.models import to_decimal
 from src.strategy.bars import Bar, PriceHistory, as_date
-
-_SCHEMA_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "store", "schema.sql"
-)
 
 
 def _text(value):
     return None if value is None else str(value)
 
 
-def _row_to_bar(row):
+def _bar_doc_id(symbol, bar_date):
+    return f"{symbol}_{bar_date}"
+
+
+def _doc_to_bar(doc):
     return Bar(
-        date=row["date"],
-        open=to_decimal(row["open"]),
-        high=to_decimal(row["high"]),
-        low=to_decimal(row["low"]),
-        close=to_decimal(row["close"]),
-        raw_close=to_decimal(row["raw_close"]),
-        volume=to_decimal(row["volume"]),
+        date=doc.get("date"),
+        open=to_decimal(doc.get("open")),
+        high=to_decimal(doc.get("high")),
+        low=to_decimal(doc.get("low")),
+        close=to_decimal(doc.get("close")),
+        raw_close=to_decimal(doc.get("raw_close")),
+        volume=to_decimal(doc.get("volume")),
     )
 
 
 class BarCache:
-    """Reads and writes ``daily_bars``/``bar_coverage``."""
+    """Reads and writes the ``daily_bars``/``bar_coverage`` collections."""
 
-    def __init__(self, db_path):
-        self.db_path = db_path
-        self._ensure_schema()
-
-    def _connect(self):
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        return connection
-
-    def _ensure_schema(self):
-        parent = os.path.dirname(os.path.abspath(self.db_path))
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(_SCHEMA_PATH, "r", encoding="utf-8") as handle:
-            schema = handle.read()
-        with self._connect() as connection:
-            connection.executescript(schema)
+    def __init__(self, client=None):
+        self.client = client or firestore.Client()
 
     def bars(self, symbol, start=None, end=None):
         """The cached PriceHistory for ``symbol``, filtered to ``[start, end]``."""
-        query = "SELECT * FROM daily_bars WHERE symbol = ?"
-        params = [symbol]
+        query = self.client.collection("daily_bars").where("symbol", "==", symbol)
         if start is not None:
-            query += " AND date >= ?"
-            params.append(str(as_date(start)))
+            query = query.where("date", ">=", str(as_date(start)))
         if end is not None:
-            query += " AND date <= ?"
-            params.append(str(as_date(end)))
-        query += " ORDER BY date ASC"
+            query = query.where("date", "<=", str(as_date(end)))
+        query = query.order_by("date")
 
-        with self._connect() as connection:
-            rows = connection.execute(query, params).fetchall()
-        return PriceHistory(symbol, tuple(_row_to_bar(row) for row in rows))
+        return PriceHistory(symbol, tuple(_doc_to_bar(doc) for doc in query.stream()))
 
     def upsert(self, symbol, bars, source, fetched_at=None):
         """Insert or replace bars for ``symbol``. Idempotent per (symbol, date)."""
         fetched_at = fetched_at or date.today().isoformat()
-        rows = [
-            (
-                symbol,
-                str(bar.date),
-                _text(bar.open),
-                _text(bar.high),
-                _text(bar.low),
-                _text(bar.close),
-                _text(bar.raw_close),
-                _text(bar.volume),
-                source,
-                fetched_at,
-            )
-            for bar in bars
-        ]
-        if not rows:
+        bars = list(bars)
+        if not bars:
             return 0
 
-        with self._connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO daily_bars
-                    (symbol, date, open, high, low, close, raw_close, volume,
-                     source, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(symbol, date) DO UPDATE SET
-                    open=excluded.open, high=excluded.high, low=excluded.low,
-                    close=excluded.close, raw_close=excluded.raw_close,
-                    volume=excluded.volume, source=excluded.source,
-                    fetched_at=excluded.fetched_at
-                """,
-                rows,
-            )
-            dates = sorted(bar.date for bar in bars)
-            connection.execute(
-                """
-                INSERT INTO bar_coverage (symbol, first_date, last_date, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(symbol) DO UPDATE SET
-                    first_date = MIN(bar_coverage.first_date, excluded.first_date),
-                    last_date = MAX(bar_coverage.last_date, excluded.last_date),
-                    source = excluded.source, fetched_at = excluded.fetched_at
-                """,
-                (symbol, str(dates[0]), str(dates[-1]), source, fetched_at),
-            )
-        return len(rows)
+        collection = self.client.collection("daily_bars")
+        for chunk_start in range(0, len(bars), _BATCH_SIZE):
+            batch = self.client.batch()
+            for bar in bars[chunk_start : chunk_start + _BATCH_SIZE]:
+                batch.set(
+                    collection.document(_bar_doc_id(symbol, bar.date)),
+                    {
+                        "symbol": symbol,
+                        "date": str(bar.date),
+                        "open": _text(bar.open),
+                        "high": _text(bar.high),
+                        "low": _text(bar.low),
+                        "close": _text(bar.close),
+                        "raw_close": _text(bar.raw_close),
+                        "volume": _text(bar.volume),
+                        "source": source,
+                        "fetched_at": fetched_at,
+                    },
+                )
+            batch.commit()
+
+        dates = sorted(bar.date for bar in bars)
+        first, last = str(dates[0]), str(dates[-1])
+        coverage_ref = self.client.collection("bar_coverage").document(symbol)
+        existing = coverage_ref.get()
+        if existing.exists:
+            first = min(first, existing.get("first_date"))
+            last = max(last, existing.get("last_date"))
+        coverage_ref.set(
+            {
+                "first_date": first,
+                "last_date": last,
+                "source": source,
+                "fetched_at": fetched_at,
+            }
+        )
+        return len(bars)
 
     def coverage(self, symbol):
         """``(first_date, last_date)`` as dates, or ``(None, None)`` if unseen."""
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT first_date, last_date FROM bar_coverage WHERE symbol = ?",
-                (symbol,),
-            ).fetchone()
-        if row is None or row["first_date"] is None:
+        doc = self.client.collection("bar_coverage").document(symbol).get()
+        if not doc.exists or doc.get("first_date") is None:
             return (None, None)
-        return (as_date(row["first_date"]), as_date(row["last_date"]))
+        return (as_date(doc.get("first_date")), as_date(doc.get("last_date")))

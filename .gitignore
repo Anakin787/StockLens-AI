@@ -27,6 +27,10 @@ build/
 *.db
 *.sqlite3
 KILL_SWITCH
+secrets/
+*firebase-adminsdk*.json
+firebase-debug.log
+firestore-debug.log
 
 # Scheduled run output
 logs/

@@ -59,7 +59,7 @@ def _num(value):
 class DashboardService:
     def __init__(self, config):
         self.config = config
-        self.store = Store(config.db_path)
+        self.store = Store()
         self.portfolio = PortfolioService(config)
         self._snapshot = _Cached(TTL_PORTFOLIO)
         self._status = _Cached(TTL_MARKET_STATUS)
@@ -212,7 +212,6 @@ class DashboardService:
                 "configured": bool(self.config.analyst.api_key),
             },
             "manual_holdings": len(self.config.manual_holdings),
-            "db_path": self.config.db_path,
         }
 
     def close(self):
