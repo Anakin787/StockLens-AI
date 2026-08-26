@@ -1,0 +1,371 @@
+"""The risk gate. Every rule gets a test that shows it firing."""
+
+from datetime import datetime
+from decimal import Decimal
+
+from src.execution.risk import RiskGate, RiskLimits, kill_switch_active
+from src.models import SOURCE_TOSS, PortfolioSnapshot, Position
+from src.strategy.base import (
+    ORDER_MARKET,
+    SIDE_BUY,
+    SIDE_SELL,
+    DailyUsage,
+    MarketSession,
+    Signal,
+    StrategyContext,
+)
+
+RATE = Decimal("1400")
+NOW = datetime(2026, 8, 26, 10, 0)
+
+#: Limits wide enough that budget and concentration never fire, for the tests
+#: that are about some other rule. A 2,000 USD order is 28% of the fixture
+#: portfolio and would otherwise trip the weight cap first.
+_ROOMY = RiskLimits(
+    max_daily_notional_krw=Decimal("999999999"),
+    max_position_weight=Decimal("1"),
+)
+
+KR_OPEN = MarketSession("KR", is_open=True, regular_close=datetime(2026, 8, 26, 15, 30))
+US_OPEN = MarketSession("US", is_open=True, regular_close=datetime(2026, 8, 26, 23, 0))
+
+
+def position(**overrides):
+    base = dict(
+        symbol="005930",
+        name="삼성전자",
+        market_country="KR",
+        currency="KRW",
+        quantity=Decimal("10"),
+        last_price=Decimal("70000"),
+        avg_purchase_price=Decimal("65000"),
+        source=SOURCE_TOSS,
+    )
+    base.update(overrides)
+    return Position(**base)
+
+
+def buy(**overrides):
+    base = dict(
+        strategy="test",
+        symbol="005930",
+        side=SIDE_BUY,
+        reason="테스트",
+        quantity=Decimal("10"),
+        limit_price=Decimal("70000"),
+        currency="KRW",
+    )
+    base.update(overrides)
+    return Signal(**base)
+
+
+def context(**overrides):
+    """A context where a default buy() passes every rule."""
+    snapshot = PortfolioSnapshot(
+        positions=[position()],
+        exchange_rate=RATE,
+        total_krw=Decimal("10000000"),
+    )
+    base = dict(
+        now=NOW,
+        snapshot=snapshot,
+        prices={"005930": Decimal("70000"), "AAPL": Decimal("200")},
+        buying_power={"KRW": Decimal("5000000"), "USD": Decimal("10000")},
+        sellable={"005930": Decimal("10")},
+        price_limits={
+            "005930": (Decimal("50000"), Decimal("90000")),
+            "AAPL": (Decimal("150"), Decimal("250")),
+        },
+        sessions={"KR": KR_OPEN, "US": US_OPEN},
+        daily_usage=DailyUsage(),
+    )
+    base.update(overrides)
+    return StrategyContext(**base)
+
+
+def evaluate(signal=None, ctx=None, limits=None):
+    return RiskGate(limits).evaluate(signal or buy(), ctx or context())
+
+
+def rule_of(decision):
+    return decision.rejection.rule if decision.rejection else None
+
+
+# ------------------------------------------------------------- happy path
+
+
+def test_a_clean_signal_becomes_an_order_intent():
+    decision = evaluate()
+    assert decision.approved
+    intent = decision.intent
+    assert (intent.symbol, intent.side) == ("005930", SIDE_BUY)
+    assert intent.notional_krw == Decimal("700000")
+    assert intent.confirm_high_value is False
+    # The executor assigns this in step [8]; the gate leaves it open.
+    assert intent.client_order_id is None
+
+
+def test_intent_carries_the_strategy_name_for_attribution():
+    assert evaluate().intent.strategy == "test"
+
+
+def test_market_intent_drops_the_limit_price():
+    decision = evaluate(
+        buy(order_type=ORDER_MARKET, limit_price=None), context()
+    )
+    assert decision.approved
+    assert decision.intent.limit_price is None
+    assert decision.intent.notional_krw == Decimal("700000")
+
+
+# ------------------------------------------------------------ kill switch
+
+
+def test_kill_switch_stops_everything():
+    decision = evaluate(buy(), context(kill_switch=True))
+    assert rule_of(decision) == "kill-switch"
+
+
+def test_kill_switch_beats_an_otherwise_perfect_signal():
+    # Ordering matters: the switch is checked before anything else, so it
+    # still fires when every other rule would have passed.
+    decision = evaluate(buy(quantity=Decimal("1")), context(kill_switch=True))
+    assert rule_of(decision) == "kill-switch"
+
+
+def test_kill_switch_file_detection(tmp_path):
+    path = tmp_path / "KILL_SWITCH"
+    assert kill_switch_active(str(path)) is False
+    path.write_text("")
+    assert kill_switch_active(str(path)) is True
+
+
+# ---------------------------------------------------------- daily budget
+
+
+def test_daily_order_count_limit():
+    ctx = context(daily_usage=DailyUsage(order_count=10))
+    assert rule_of(evaluate(buy(), ctx)) == "daily-order-limit"
+
+
+def test_daily_notional_limit_counts_what_was_already_spent():
+    ctx = context(daily_usage=DailyUsage(notional_krw=Decimal("4500000")))
+    limits = RiskLimits(max_daily_notional_krw=Decimal("5000000"))
+    # 4,500,000 spent + 700,000 proposed = 5,200,000 > 5,000,000
+    assert rule_of(evaluate(buy(), ctx, limits)) == "daily-notional-limit"
+
+
+def test_daily_notional_limit_allows_an_exact_fit():
+    ctx = context(daily_usage=DailyUsage(notional_krw=Decimal("4300000")))
+    limits = RiskLimits(max_daily_notional_krw=Decimal("5000000"))
+    assert evaluate(buy(), ctx, limits).approved
+
+
+# ------------------------------------------------------ position weight
+
+
+def test_position_weight_counts_the_holding_the_order_would_create():
+    # Already holding 700,000 of a 10,000,000 portfolio; buying 1,500,000 more
+    # lands at 22%, over the 20% cap - even though the order alone is only 15%.
+    signal = buy(quantity=Decimal("21"), limit_price=Decimal("71500"))
+    limits = RiskLimits(max_daily_notional_krw=Decimal("99999999"))
+    assert rule_of(evaluate(signal, context(), limits)) == "position-weight-limit"
+
+
+def test_selling_is_never_blocked_by_concentration():
+    signal = buy(side=SIDE_SELL, quantity=Decimal("10"))
+    limits = RiskLimits(max_position_weight=Decimal("0.001"))
+    assert evaluate(signal, context(), limits).approved
+
+
+# ------------------------------------------------------------- sessions
+
+
+def test_closed_market_is_rejected():
+    ctx = context(sessions={"KR": MarketSession("KR", is_open=False)})
+    assert rule_of(evaluate(buy(), ctx)) == "order-hours-closed"
+
+
+def test_amount_order_is_refused_in_the_last_hour():
+    ctx = context(now=datetime(2026, 8, 26, 14, 45))
+    signal = buy(quantity=None, amount=Decimal("500000"))
+    assert rule_of(evaluate(signal, ctx)) == "amount-order-outside-regular-hours"
+
+
+def test_amount_order_is_fine_earlier_in_the_session():
+    signal = buy(quantity=None, amount=Decimal("500000"))
+    assert evaluate(signal, context()).approved
+
+
+def test_share_orders_are_unaffected_by_the_early_cutoff():
+    ctx = context(now=datetime(2026, 8, 26, 15, 20))
+    assert evaluate(buy(), ctx).approved
+
+
+# --------------------------------------------------- fractional quantity
+
+
+def test_fractional_quantity_allowed_only_for_us_market_sell():
+    ctx = context(sellable={"AAPL": Decimal("10")})
+    ok = buy(
+        symbol="AAPL",
+        side=SIDE_SELL,
+        currency="USD",
+        order_type=ORDER_MARKET,
+        limit_price=None,
+        quantity=Decimal("1.5"),
+    )
+    # 23:00 close, so 10:00 is well clear of the one-hour cutoff.
+    assert evaluate(ok, ctx).approved
+
+
+def test_fractional_quantity_rejected_for_a_korean_buy():
+    signal = buy(quantity=Decimal("1.5"))
+    assert rule_of(evaluate(signal, context())) == "fractional-quantity-not-allowed"
+
+
+def test_fractional_quantity_rejected_for_a_us_limit_sell():
+    ctx = context(sellable={"AAPL": Decimal("10")})
+    signal = buy(
+        symbol="AAPL",
+        side=SIDE_SELL,
+        currency="USD",
+        quantity=Decimal("1.5"),
+        limit_price=Decimal("200"),
+    )
+    assert rule_of(evaluate(signal, ctx)) == "fractional-quantity-not-allowed"
+
+
+# ----------------------------------------------------------- price band
+
+
+def test_limit_above_the_upper_band_is_rejected():
+    signal = buy(limit_price=Decimal("95000"))
+    assert rule_of(evaluate(signal, context())) == "price-out-of-range"
+
+
+def test_limit_below_the_lower_band_is_rejected():
+    signal = buy(limit_price=Decimal("40000"))
+    assert rule_of(evaluate(signal, context())) == "price-out-of-range"
+
+
+def test_market_orders_skip_the_band_check():
+    # A market order has no price of its own, so the band cannot apply - and
+    # missing band data must not block it even in strict mode.
+    ctx = context(price_limits={})
+    signal = buy(order_type=ORDER_MARKET, limit_price=None)
+    assert evaluate(signal, ctx).approved
+
+
+# --------------------------------------------------------------- balance
+
+
+def test_insufficient_buying_power():
+    ctx = context(buying_power={"KRW": Decimal("100000")})
+    assert rule_of(evaluate(buy(), ctx)) == "insufficient-buying-power"
+
+
+def test_insufficient_sellable_quantity():
+    signal = buy(side=SIDE_SELL, quantity=Decimal("50"))
+    assert rule_of(evaluate(signal, context())) == "insufficient-sellable-quantity"
+
+
+def test_foreign_buying_power_is_checked_in_its_own_currency():
+    signal = buy(
+        symbol="AAPL", currency="USD", quantity=Decimal("10"), limit_price=Decimal("200")
+    )
+    ctx = context(buying_power={"USD": Decimal("500")})
+    assert rule_of(evaluate(signal, ctx, _ROOMY)) == "insufficient-buying-power"
+
+
+def test_foreign_notional_is_converted_for_the_krw_budget():
+    signal = buy(
+        symbol="AAPL", currency="USD", quantity=Decimal("10"), limit_price=Decimal("200")
+    )
+    decision = evaluate(signal, context(), _ROOMY)
+    assert decision.approved
+    assert decision.intent.notional_krw == Decimal("2800000")  # 2,000 USD * 1,400
+
+
+# ------------------------------------------------------------ high value
+
+
+def test_high_value_order_needs_explicit_permission():
+    signal = buy(quantity=Decimal("2000"), limit_price=Decimal("70000"))
+    limits = RiskLimits(
+        max_daily_notional_krw=Decimal("999999999"),
+        max_position_weight=Decimal("100"),
+    )
+    ctx = context(buying_power={"KRW": Decimal("999999999")})
+    assert rule_of(evaluate(signal, ctx, limits)) == "high-value-not-permitted"
+
+
+def test_permitted_high_value_order_sets_the_confirm_flag():
+    signal = buy(quantity=Decimal("2000"), limit_price=Decimal("70000"))
+    limits = RiskLimits(
+        max_daily_notional_krw=Decimal("999999999"),
+        max_position_weight=Decimal("100"),
+        allow_high_value=True,
+    )
+    ctx = context(buying_power={"KRW": Decimal("999999999")})
+    decision = evaluate(signal, ctx, limits)
+    assert decision.approved
+    assert decision.intent.confirm_high_value is True
+
+
+# ----------------------------------------------------- missing reference data
+
+
+def test_strict_mode_rejects_what_it_cannot_verify():
+    cases = {
+        "buying-power-unknown": context(buying_power={}),
+        "sellable-quantity-unknown": None,  # handled below
+        "market-session-unknown": context(sessions={}),
+        "price-limits-unknown": context(price_limits={}),
+    }
+    assert rule_of(evaluate(buy(), cases["buying-power-unknown"])) == "buying-power-unknown"
+    assert rule_of(evaluate(buy(), cases["market-session-unknown"])) == "market-session-unknown"
+    assert rule_of(evaluate(buy(), cases["price-limits-unknown"])) == "price-limits-unknown"
+
+    sell = buy(side=SIDE_SELL)
+    assert rule_of(evaluate(sell, context(sellable={}))) == "sellable-quantity-unknown"
+
+
+def test_strict_mode_rejects_a_market_order_with_no_quote():
+    signal = buy(order_type=ORDER_MARKET, limit_price=None)
+    ctx = context(prices={})
+    assert rule_of(evaluate(signal, ctx)) == "price-unknown"
+
+
+def test_lenient_mode_checks_only_what_it_can():
+    lenient = RiskLimits(strict=False)
+    bare = context(
+        prices={}, buying_power={}, sellable={}, price_limits={}, sessions={}
+    )
+    assert evaluate(buy(), bare, lenient).approved
+
+
+def test_lenient_mode_still_enforces_the_kill_switch():
+    lenient = RiskLimits(strict=False)
+    bare = context(
+        prices={},
+        buying_power={},
+        sellable={},
+        price_limits={},
+        sessions={},
+        kill_switch=True,
+    )
+    assert rule_of(evaluate(buy(), bare, lenient)) == "kill-switch"
+
+
+def test_lenient_mode_still_enforces_the_daily_limits():
+    lenient = RiskLimits(strict=False)
+    bare = context(
+        prices={},
+        buying_power={},
+        sellable={},
+        price_limits={},
+        sessions={},
+        daily_usage=DailyUsage(order_count=99),
+    )
+    assert rule_of(evaluate(buy(), bare, lenient)) == "daily-order-limit"

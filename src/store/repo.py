@@ -5,11 +5,14 @@ reports today's numbers, not last month's - so every report run appends one
 snapshot row. Starting this early is the whole point.
 """
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from src.models import to_decimal
+from src.strategy.base import DailyUsage
 
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 
@@ -187,3 +190,98 @@ class Store:
                 "SELECT * FROM reports ORDER BY ts DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # --------------------------------------------------------------- signals
+
+    def save_decision(self, decision, ts=None):
+        """Record one risk-gate decision and return its ``signals.id``.
+
+        Accepted and rejected signals go into the same table so the audit
+        trail reads in one pass; a rejection additionally writes the rule that
+        stopped it. Called for every signal, not only the ones that trade.
+        """
+        signal = decision.signal
+        ts = ts or datetime.now().replace(microsecond=0).isoformat()
+        outcome = "accepted" if decision.approved else "rejected"
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO signals (
+                    ts, strategy, symbol, side, order_type,
+                    quantity, amount, limit_price, currency,
+                    reason, payload, outcome
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    ts,
+                    signal.strategy,
+                    signal.symbol,
+                    signal.side,
+                    signal.order_type,
+                    _text(signal.quantity),
+                    _text(signal.amount),
+                    _text(signal.limit_price),
+                    signal.currency,
+                    signal.reason,
+                    json.dumps(signal.meta, ensure_ascii=False, default=str)
+                    if signal.meta
+                    else None,
+                    outcome,
+                ),
+            )
+            signal_id = cursor.lastrowid
+
+            if decision.rejection is not None:
+                connection.execute(
+                    "INSERT INTO rejections (signal_id, rule, detail) VALUES (?,?,?)",
+                    (
+                        signal_id,
+                        decision.rejection.rule,
+                        decision.rejection.detail,
+                    ),
+                )
+        return signal_id
+
+    def recent_signals(self, limit=50):
+        """Signals newest first, each with the rule that rejected it, if any."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.*, r.rule AS reject_rule, r.detail AS reject_detail
+                FROM signals s
+                LEFT JOIN rejections r ON r.signal_id = s.id
+                ORDER BY s.ts DESC, s.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---------------------------------------------------------------- orders
+
+    def daily_usage(self, day=None):
+        """Today's order count and total notional, for the risk gate.
+
+        Counts what was actually sent, so a rejected signal never consumes
+        budget. Paper orders are counted too: a paper run that would have
+        blown the daily limit should say so rather than look clean.
+        """
+        day = day or datetime.now().strftime("%Y-%m-%d")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS n, COALESCE(SUM(CAST(notional_krw AS REAL)), 0) AS total
+                FROM orders
+                WHERE substr(ts, 1, 10) = ? AND status != 'rejected'
+                """,
+                (day,),
+            ).fetchone()
+
+        # SUM has to go through REAL - SQLite cannot add TEXT - so the total is
+        # re-quantised to whole won here rather than being carried as a float.
+        # Won-level precision is all a budget check needs.
+        total = to_decimal(row["total"], default=0) or Decimal(0)
+        return DailyUsage(
+            order_count=row["n"], notional_krw=total.quantize(Decimal("1"))
+        )

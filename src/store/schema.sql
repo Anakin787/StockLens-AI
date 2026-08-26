@@ -62,3 +62,70 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reports_ts ON reports (ts DESC);
+
+-- ---------------------------------------------------------------- Phase 2
+--
+-- Every strategy decision is recorded, accepted or not. A rejected signal is
+-- as interesting as an executed one: "the strategy wanted to buy and the risk
+-- gate said no, here is the rule" is the answer to most questions about why a
+-- day went the way it did, and it is unrecoverable if not written down.
+
+CREATE TABLE IF NOT EXISTS signals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    strategy    TEXT NOT NULL,
+    symbol      TEXT NOT NULL,
+    side        TEXT NOT NULL,
+    order_type  TEXT NOT NULL,
+    quantity    TEXT,
+    amount      TEXT,
+    limit_price TEXT,
+    currency    TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    payload     TEXT,               -- Signal.meta as JSON
+    outcome     TEXT NOT NULL       -- accepted | rejected
+);
+
+CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals (ts DESC);
+
+CREATE TABLE IF NOT EXISTS rejections (
+    signal_id   INTEGER NOT NULL REFERENCES signals (id),
+    rule        TEXT NOT NULL,
+    detail      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rejections_signal ON rejections (signal_id);
+
+CREATE TABLE IF NOT EXISTS orders (
+    client_order_id TEXT PRIMARY KEY,   -- our idempotency key
+    order_id        TEXT,               -- assigned by Toss
+    signal_id       INTEGER REFERENCES signals (id),
+    ts              TEXT NOT NULL,
+    strategy        TEXT,
+    symbol          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    order_type      TEXT NOT NULL,
+    quantity        TEXT,
+    amount          TEXT,
+    price           TEXT,
+    currency        TEXT,
+    -- Denormalised so the daily notional limit is one SUM rather than a
+    -- re-derivation that would need the day's exchange rate back.
+    notional_krw    TEXT,
+    status          TEXT NOT NULL,
+    mode            TEXT NOT NULL,      -- paper | live
+    error_code      TEXT,
+    updated_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders (ts DESC);
+
+CREATE TABLE IF NOT EXISTS fills (
+    order_id    TEXT NOT NULL,
+    ts          TEXT NOT NULL,
+    quantity    TEXT NOT NULL,
+    price       TEXT NOT NULL,
+    commission  TEXT,
+    tax         TEXT,
+    PRIMARY KEY (order_id, ts, quantity, price)
+);
