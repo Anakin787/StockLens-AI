@@ -332,3 +332,133 @@ def test_amount_respects_the_instrument_max_weight():
     if aaa:
         # 1% of 10,000,000 = 100,000 KRW = ~74 USD at rate 1350.
         assert aaa[0].amount <= D("75")
+
+
+# ------------------------------------------------------- bug-fix regressions
+
+
+def test_dislocation_never_spends_below_the_cash_reserve():
+    # A large cash pile with no weekly deploy cap should still leave the
+    # reserve untouched, even under the dislocation multiplier - the
+    # multiplier must narrow the deployable figure, never widen past it.
+    base = flat_then_move("QQQ", flat_n=25, flat_price=100, moves=[1.01] * 10 + [0.95])
+    history = {
+        "QQQ": base,
+        "AAA": trending("AAA", 36, "0.02", start_price=50),
+        "BBB": trending("BBB", 36, "0.005", start_price=50),
+    }
+    last_day = START + timedelta(days=len(base) - 1)
+    while last_day.weekday() == 0:
+        last_day += timedelta(days=1)
+    now = datetime(last_day.year, last_day.month, last_day.day)
+    buying_power = {"USD": D("10000")}
+    s = strategy(
+        dislocation_drawdown=D("0.03"),
+        cash_reserve=D("0.20"),
+        max_deploy_per_week_usd=None,
+    )
+    signals = s.evaluate(context(now, history, buying_power=buying_power))
+    spent = sum(sig.amount for sig in signals if sig.side == SIDE_BUY)
+    assert spent <= D("10000") * (D("1") - D("0.20"))
+
+
+def test_max_deploy_cap_bounds_a_large_cash_pile():
+    history = _base_history()
+    monday = START + timedelta(days=39)
+    monday = monday - timedelta(days=monday.weekday())
+    now = datetime(monday.year, monday.month, monday.day)
+    s = strategy(max_deploy_per_week_usd=D("50"), cash_reserve=D("0"))
+    signals = s.evaluate(
+        context(now, history, buying_power={"USD": D("100000")})
+    )
+    spent = sum(sig.amount for sig in signals if sig.side == SIDE_BUY)
+    assert spent <= D("50")
+
+
+def test_fallback_does_not_bypass_the_absolute_momentum_gate():
+    # Every candidate has negative momentum - a genuine downturn, exactly the
+    # case min_score exists to keep the strategy out of. The fallback must
+    # not silently deploy the whole budget into an equally unvetted QQQ.
+    history = {
+        "QQQ": trending("QQQ", 40, "-0.01", start_price=100),
+        "AAA": trending("AAA", 40, "-0.02", start_price=50),
+        "BBB": trending("BBB", 40, "-0.015", start_price=50),
+    }
+    monday = START + timedelta(days=39)
+    monday = monday - timedelta(days=monday.weekday())
+    now = datetime(monday.year, monday.month, monday.day)
+    signals = strategy().evaluate(context(now, history))
+    assert not any(s.side == SIDE_BUY for s in signals)
+
+
+def test_cooldown_fails_closed_when_the_recent_log_does_not_reach_back_far_enough():
+    # ctx.recent has entries, but none of them are old enough to prove there
+    # was no dislocation buy just outside the window - a truncated log (the
+    # live path passes a fixed-size window) must not read as a clean cooldown.
+    base = flat_then_move("QQQ", flat_n=25, flat_price=100, moves=[1.01] * 10 + [0.95])
+    history = {
+        "QQQ": base,
+        "AAA": trending("AAA", 36, "0.02", start_price=50),
+        "BBB": trending("BBB", 36, "0.005", start_price=50),
+    }
+    last_day = START + timedelta(days=len(base) - 1)
+    while last_day.weekday() == 0:
+        last_day += timedelta(days=1)
+    now = datetime(last_day.year, last_day.month, last_day.day)
+    # The only entry in the log is from today - it does not reach back the
+    # full dislocation_cooldown_days=3, so "no matching entry" is unverifiable.
+    recent = [
+        {
+            "ts": last_day.isoformat(),
+            "strategy": "some-other-strategy",
+            "symbol": "XYZ",
+            "meta": {"mode": "weekly"},
+        }
+    ]
+    signals = strategy(dislocation_drawdown=D("0.03")).evaluate(
+        context(now, history, recent=recent)
+    )
+    assert not any(s.meta.get("mode") == "dislocation" for s in signals if s.side == SIDE_BUY)
+
+
+def test_cooldown_allows_a_dislocation_buy_when_the_log_is_genuinely_empty():
+    # No recent-signal history at all (e.g. day one) is not the same as a
+    # truncated log - there is nothing to be uncertain about, so this must
+    # not be blocked.
+    base = flat_then_move("QQQ", flat_n=25, flat_price=100, moves=[1.01] * 10 + [0.95])
+    history = {
+        "QQQ": base,
+        "AAA": trending("AAA", 36, "0.02", start_price=50),
+        "BBB": trending("BBB", 36, "0.005", start_price=50),
+    }
+    last_day = START + timedelta(days=len(base) - 1)
+    while last_day.weekday() == 0:
+        last_day += timedelta(days=1)
+    now = datetime(last_day.year, last_day.month, last_day.day)
+    signals = strategy(dislocation_drawdown=D("0.03")).evaluate(
+        context(now, history, recent=())
+    )
+    assert any(s.meta.get("mode") == "dislocation" for s in signals if s.side == SIDE_BUY)
+
+
+def test_from_config_rejects_a_universe_whose_max_weight_exceeds_the_gate():
+    from src.config import TradingConfig
+    from src.toss.errors import TossConfigError
+
+    trading_config = TradingConfig(
+        universe=[{"symbol": "QQQ", "kind": "INDEX_ETF", "max_weight": 0.60}],
+        limits={},  # default max_position_weight=0.20, no override for QQQ
+    )
+    with pytest.raises(TossConfigError):
+        MomentumDcaStrategy.from_config(trading_config)
+
+
+def test_from_config_accepts_a_universe_with_a_matching_override():
+    from src.config import TradingConfig
+
+    trading_config = TradingConfig(
+        universe=[{"symbol": "QQQ", "kind": "INDEX_ETF", "max_weight": 0.60}],
+        limits={"max_position_weight_overrides": {"QQQ": D("0.60")}},
+    )
+    s = MomentumDcaStrategy.from_config(trading_config)
+    assert s.universe["QQQ"].max_weight == D("0.60")

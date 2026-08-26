@@ -91,6 +91,13 @@ class MomentumDcaParams:
     # --- sizing ---
     cash_reserve: Decimal = Decimal("0.05")
     min_order_usd: Decimal = Decimal("30")
+    #: Hard ceiling on how much gets deployed in a single evaluation, in USD.
+    #: Without this, a few skipped weeks (no eligible candidate, a data gap)
+    #: let cash build up, and the next weekly rebalance deploys *all of it* -
+    #: the whole account re-priced onto one or two names in one shot. The
+    #: default is a rough one-month-contribution's worth at typical KRW/USD;
+    #: set this to match your actual monthly contribution size in USD.
+    max_deploy_per_week_usd: Decimal | None = Decimal("700")
 
     #: A feed this many days stale is treated as absent, not as "the last
     #: known price".
@@ -134,7 +141,9 @@ class MomentumDcaParams:
             if name not in raw:
                 continue
             value = raw[name]
-            if kind == "decimal":
+            if kind == "decimal_or_none":
+                kwargs[name] = None if value is None else _dec(value, name)
+            elif kind == "decimal":
                 kwargs[name] = _dec(value, name)
             elif kind is bool:
                 kwargs[name] = bool(value)
@@ -182,6 +191,7 @@ MomentumDcaParams._FIELDS = {
     "dislocation_requires_trend": bool,
     "dislocation_budget_multiple": "decimal",
     "cash_reserve": "decimal",
+    "max_deploy_per_week_usd": "decimal_or_none",
     "min_order_usd": "decimal",
     "stale_days": int,
 }
@@ -214,6 +224,32 @@ def _entry_meta(entry):
     return {}
 
 
+def _require_weight_caps_fit_the_gate(universe, limits):
+    """Fail at load time if this strategy plans to hold more than the gate
+    allows, rather than letting it surface as position-weight-limit rejections
+    on every single order once running.
+
+    ``Instrument.max_weight`` is the strategy's *plan* for how concentrated a
+    holding may get; the risk gate's ``max_position_weight`` (and its
+    per-symbol overrides) is the *enforced* ceiling. A plan above the ceiling
+    is not a strategy decision the gate quietly narrows down to size - it is
+    a configuration mismatch, and the two should be reconciled before the
+    account is trading, not discovered from a wall of rejections in
+    production days later.
+    """
+    for instrument in universe.enabled():
+        cap = limits.max_position_weight_overrides.get(
+            instrument.symbol, limits.max_position_weight
+        )
+        if instrument.max_weight > cap:
+            raise TossConfigError(
+                f"{instrument.symbol}의 전략 목표 비중({instrument.max_weight:.1%})이 "
+                f"리스크 게이트 한도({cap:.1%})를 넘습니다. config.yaml의 "
+                "trading.limits.max_position_weight_overrides에 "
+                f"{instrument.symbol}: {instrument.max_weight} 이상을 추가하세요."
+            )
+
+
 class MomentumDcaStrategy(Strategy):
     """Rank the universe by risk-adjusted momentum; concentrate new cash into
     the top names; gate leverage on trend; exit leverage when trend breaks."""
@@ -228,10 +264,10 @@ class MomentumDcaStrategy(Strategy):
     def from_config(cls, trading_config=None):
         universe_rows = getattr(trading_config, "universe", None) if trading_config else None
         params_raw = getattr(trading_config, "strategy_params", None) if trading_config else None
-        return cls(
-            universe=parse_universe(universe_rows),
-            params=MomentumDcaParams.from_mapping(params_raw),
-        )
+        universe = parse_universe(universe_rows)
+        if trading_config is not None:
+            _require_weight_caps_fit_the_gate(universe, trading_config.risk_limits())
+        return cls(universe=universe, params=MomentumDcaParams.from_mapping(params_raw))
 
     # ---------------------------------------------------------- evaluate
 
@@ -336,23 +372,44 @@ class MomentumDcaStrategy(Strategy):
         if not crashed:
             return False
 
-        last_dislocation = self._last_dislocation_date(ctx)
+        last_dislocation, oldest_known = self._last_dislocation_date(ctx)
         if last_dislocation is not None:
             if (today - last_dislocation).days < p.dislocation_cooldown_days:
                 return False
+        elif oldest_known is not None and (today - oldest_known).days < p.dislocation_cooldown_days:
+            # No dislocation buy found in ctx.recent, but the log's own
+            # oldest entry doesn't reach back a full cooldown window - it may
+            # have been truncated (the live path passes a fixed-size window
+            # via store.recent_signals()) rather than genuinely empty of one.
+            # "Can't verify" is treated as "cooldown is active", the same
+            # strict-by-default posture the risk gate takes for missing
+            # data - fail-open here would let a truncated log re-arm a
+            # double-budget dislocation buy days early.
+            return False
         return True
 
     def _last_dislocation_date(self, ctx):
+        """(most recent dislocation buy by this strategy, oldest entry seen).
+
+        The second value lets the caller tell "no dislocation buy happened"
+        apart from "we don't have enough history to know" - an empty or
+        short ``ctx.recent`` must not read as a clean cooldown.
+        """
         latest = None
+        oldest = None
         for entry in ctx.recent or ():
-            if not isinstance(entry, dict) or entry.get("strategy") != self.name:
+            if not isinstance(entry, dict):
+                continue
+            entry_date = _entry_date(entry)
+            if entry_date is not None and (oldest is None or entry_date < oldest):
+                oldest = entry_date
+            if entry.get("strategy") != self.name:
                 continue
             if _entry_meta(entry).get("mode") != MODE_DISLOCATION:
                 continue
-            entry_date = _entry_date(entry)
             if entry_date is not None and (latest is None or entry_date > latest):
                 latest = entry_date
-        return latest
+        return latest, oldest
 
     # ---------------------------------------------------------- ranking
 
@@ -458,16 +515,40 @@ class MomentumDcaStrategy(Strategy):
                         and len(history) >= p.required_bars
                     ):
                         score = self._score(history.closes(), p)
-                        if score is not None:
+                        # The fallback is a slot filler, not an exemption from
+                        # the absolute-momentum gate: in a genuine downturn
+                        # every ranked candidate can legitimately fail
+                        # min_score, and routing the unfilled weight into an
+                        # unvetted (possibly deeply negative-momentum)
+                        # fallback would spend the whole budget on exactly
+                        # the instrument the gate exists to keep out.
+                        if score is not None and score > p.min_score:
                             allocations.append((fallback, remaining_weight, score))
         return allocations
 
     def _budget(self, ctx, mode, p):
+        """Cash available to deploy this evaluation.
+
+        ``cash_reserve`` is a floor on cash, not a starting point to multiply
+        up from - it is computed once here and never exceeded, in either
+        mode. Applying the dislocation multiplier to the reserve-adjusted
+        figure and then re-clamping to raw ``usd_power`` (an earlier version
+        of this method did exactly that) silently cancels the reserve on
+        every dislocation buy; the fix is to only ever narrow ``spendable``,
+        never widen past it.
+        """
         usd_power = ctx.buying_power.get("USD") or ZERO
-        budget = usd_power * (ONE - p.cash_reserve)
-        if mode == MODE_DISLOCATION:
-            budget = budget * p.dislocation_budget_multiple
-        return max(min(budget, usd_power), ZERO)
+        if usd_power <= ZERO:
+            return ZERO
+
+        spendable = usd_power * (ONE - p.cash_reserve)
+
+        cap = p.max_deploy_per_week_usd
+        if cap is not None and mode == MODE_DISLOCATION:
+            cap = cap * p.dislocation_budget_multiple
+
+        budget = spendable if cap is None else min(spendable, cap)
+        return max(budget, ZERO)
 
     def _clip_to_max_weight(self, ctx, instrument, amount):
         """Shrink ``amount`` so the post-buy weight stays under this

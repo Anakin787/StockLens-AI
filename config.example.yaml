@@ -88,19 +88,24 @@ trading:
     # 종목별 예외. 집중형 전략(예: momentum_dca)은 지수 ETF 한 종목에 비중이
     # 몰리는 것이 계획이지, 버그가 아닙니다 — 그 예외는 전략의 주장이 아니라
     # 여기 적힌 사실이어야 합니다. momentum_dca를 쓴다면 아래 예시를 참고하세요.
-    max_position_weight_overrides: {}
-    # QQQ: 0.65
-    # AAPL: 0.40
-    # MSFT: 0.40
-    # NVDA: 0.40
-    # GOOGL: 0.40
-    # AMZN: 0.40
-    # META: 0.40
-    # TSLA: 0.40
-    # SOXX: 0.40
-    # SMH: 0.40
-    # QLD: 0.20   # 2배 레버리지 — 개별주보다 더 타이트하게
-    # SSO: 0.20
+    # momentum_dca의 DEFAULT_UNIVERSE(src/strategy/universe.py)가 쓰는
+    # max_weight와 정확히 맞춰 두었습니다 — 여기 값이 전략의 목표 비중보다
+    # 낮으면 momentum_dca는 로드 시점에 즉시 실패합니다(의도된 동작: 매 주문마다
+    # position-weight-limit로 거부되는 것보다 시작 전에 아는 편이 낫습니다).
+    # 커스텀 유니버스를 쓴다면 각 종목의 max_weight에 맞게 조정하세요.
+    max_position_weight_overrides:
+      QQQ: 0.60
+      AAPL: 0.35
+      MSFT: 0.35
+      NVDA: 0.35
+      GOOGL: 0.35
+      AMZN: 0.35
+      META: 0.35
+      TSLA: 0.35
+      SOXX: 0.30
+      SMH: 0.30
+      QLD: 0.15   # 2배 레버리지 — 개별주보다 더 타이트하게
+      SSO: 0.15
 
     # 이 금액 미만이면 비중 검사를 건너뜁니다. 전략의 첫 매수는 정의상 비중
     # 100%이므로, 이 면제가 없으면 시드가 작은 집중형 전략은 시작조차
