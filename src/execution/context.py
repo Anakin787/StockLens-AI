@@ -43,6 +43,8 @@ def build_context(
     now=None,
     kill_switch_path="KILL_SWITCH",
     snapshot=None,
+    history=None,
+    recent=(),
 ):
     """Assemble the context a strategy and the risk gate both read.
 
@@ -73,6 +75,8 @@ def build_context(
         sessions=_sessions(service, now),
         daily_usage=store.daily_usage(now.strftime("%Y-%m-%d")),
         kill_switch=kill_switch_active(kill_switch_path),
+        history=history or {},
+        recent=tuple(recent),
     )
 
 

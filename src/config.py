@@ -156,6 +156,15 @@ class TradingConfig:
     #: trade.
     strategies: list = field(default_factory=list)
     limits: dict = field(default_factory=dict)
+    #: Raw instrument rows for ``src.strategy.universe.parse_universe``. Kept
+    #: raw (not parsed into a Universe here) so this module does not need to
+    #: import the strategy layer - the same separation ``risk_limits()``
+    #: already keeps for RiskLimits.
+    universe: list = field(default_factory=list)
+    #: Free-form parameters for whichever strategy is loaded. Config does not
+    #: validate the keys - a strategy's parameters are that strategy's
+    #: business, the same way its module path is.
+    strategy_params: dict = field(default_factory=dict)
 
     def risk_limits(self):
         """Build a RiskLimits from the config, keeping every default."""
@@ -283,7 +292,28 @@ _RISK_LIMIT_FIELDS = {
     "allow_high_value": bool,
     "amount_order_cutoff_minutes": int,
     "strict": bool,
+    #: Per-symbol exception to max_position_weight. A dict, not a scalar - see
+    #: the dedicated branch below rather than the generic loop.
+    "max_position_weight_overrides": "weight_map",
+    #: Below this equity, the weight check is skipped entirely. A strategy's
+    #: very first order is, by definition, 100% of the account; without this,
+    #: no concentrated strategy could ever place one.
+    "weight_check_min_equity_krw": "decimal",
 }
+
+
+def _parse_weight_overrides(value):
+    if not isinstance(value, dict):
+        raise TossConfigError(
+            "'trading.limits.max_position_weight_overrides'는 "
+            f"{{심볼: 비중}} 매핑이어야 합니다: {value!r}"
+        )
+    parsed = {}
+    for symbol, weight in value.items():
+        parsed[str(symbol)] = _decimal(
+            weight, f"trading.limits.max_position_weight_overrides.{symbol}"
+        )
+    return parsed
 
 
 def _parse_trading(raw_trading):
@@ -305,6 +335,8 @@ def _parse_trading(raw_trading):
         value = raw_limits[name]
         if kind == "decimal":
             limits[name] = _decimal(value, f"trading.limits.{name}")
+        elif kind == "weight_map":
+            limits[name] = _parse_weight_overrides(value)
         elif kind is bool:
             limits[name] = bool(value)
         else:
@@ -315,12 +347,23 @@ def _parse_trading(raw_trading):
                     f"'trading.limits.{name}' 값을 정수로 읽을 수 없습니다: {value!r}"
                 ) from None
 
+    universe_rows = raw_trading.get("universe") or []
+    if universe_rows:
+        # Validated eagerly, at startup, rather than the first time a
+        # strategy is constructed - a bad row should fail loudly before any
+        # signal is ever evaluated.
+        from src.strategy.universe import parse_universe
+
+        parse_universe(universe_rows)
+
     return TradingConfig(
         enabled=bool(raw_trading.get("enabled", False)),
         kill_switch_path=raw_trading.get("kill_switch_path")
         or DEFAULT_KILL_SWITCH_PATH,
         strategies=[str(s) for s in (raw_trading.get("strategies") or []) if s],
         limits=limits,
+        universe=universe_rows,
+        strategy_params=raw_trading.get("strategy_params") or {},
     )
 
 

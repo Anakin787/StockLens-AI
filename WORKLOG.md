@@ -4,6 +4,56 @@
 
 ---
 
+## 2026-08-26 — Phase 2 [6] 잔여분: 모멘텀 DCA 전략 + 백테스트 러너
+
+첫 실전 전략을 채웠다: `src.strategy.momentum_dca:MomentumDcaStrategy`. 조건은
+시드가 작고(월 50~100만원 적립), 공격적이되 규칙 기반 — 상위 1~2종목 모멘텀
+집중 배분, 2배 지수 ETF까지만, 추세 필터로 레버리지만 게이트.
+
+### 1. 콜드스타트 함정
+
+`max_position_weight` 검사는 자산이 0일 때만 건너뛰었다. 그런데 전략의
+**생애 첫 매수는 정의상 비중 100%** — 시드가 작은 이번 케이스에선 엣지 케이스가
+아니라 1개월차에 바로 첫 주문이 거부된다. `weight_check_min_equity_krw` 면제선과
+`max_position_weight_overrides`(종목별 예외) 두 개를 게이트에 추가해서 풀었다.
+전역 기본은 0.20을 그대로 두고, 집중을 허용할 종목만 config에 명시한 사실로
+남긴다 — 코드가 아니라 config가 그 예외를 갖고 있어야 조용히 넓어지지 않는다.
+
+### 2. `StrategyContext`에 필드 두 개만 추가
+
+`history`(symbol → PriceHistory)와 `recent`(최근 신호 로그) — 둘 다 기본값과
+함께 뒤에 붙여서 `risk.py`를 포함한 기존 생성 지점은 전부 그대로 돈다. 지표는
+전략이 이 데이터로 직접 계산하고(`src/strategy/indicators.py`, stdlib+Decimal),
+컨텍스트에 조회 가능한 콜백을 두지 않았다 — 콜백은 이름만 다른 I/O 탈출구다.
+
+### 3. 레버리지 정책은 조건문이 아니라 `Instrument.__post_init__`
+
+3배 이상, 인버스, 개별종목 레버리지 ETF(NVDL·TSLL류)는 유니버스에 넣는 순간
+예외가 난다. config에서 읽은 값도 같은 생성자를 거치므로 정책이 코드에 있지
+"조심하기로 한 약속"으로 남지 않는다.
+
+### 4. 백테스트는 진짜 `RiskGate`를 문자 그대로 통과한다
+
+`SimPortfolio.snapshot()`이 진짜 `PortfolioSnapshot`/`Position`을 만들기
+때문에 — 목이 아니라. 리밸런스는 주 1회(월요일) 기본, 급락(−3%대 하락 +
+20일 낙폭 8%+ + 쿨다운)에만 일 단위 개입. `TWR`(전략 성과)과
+`IRR`(계좌 실현 성과, XIRR)을 둘 다 보고한다 — 매월 적립이 있으면 둘이 크게
+갈라지고, 하나만 "CAGR"이라고 부르면 둘 중 하나는 틀린 질문에 답한 게 된다.
+MDD는 원자산이 아니라 TWR 인덱스 기준 — 안 그러면 매월 입금이 낙폭을 가린다.
+
+`python -m scripts.backtest --refresh`로 yfinance 시세를 SQLite에 캐시하고,
+`--offline`이면 그 캐시만 쓴다 — 재현성이 목적이라 오프라인 모드는 구멍이
+있어도 절대 네트워크를 부르지 않는다.
+
+### 다음
+
+- `config.yaml`에 `trading.universe`/`strategy_params`/`max_position_weight_overrides`를
+  채우고 `python -m scripts.backtest --refresh --offline`로 인/아웃오브샘플
+  검증 (파라미터가 ~20개라 과최적화 위험이 실재함 - 시도한 조합은 여기 기록할 것)
+- PAPER로 몇 주 돌리며 같은 날짜의 백테스트 재생과 신호를 diff — 불일치는
+  순수성 버그
+- 개별 손절매는 이번에 파라미터만 두고 OFF — 백테스트로 넣을지 결정
+
 ## 2026-08-26 — Phase 2 [8]: PAPER 모드 주문 실행
 
 `python trade.py`로 신호 → 리스크 게이트 → DB까지 한 번에 흐른다. **HTTP는 한 건도 나가지 않는다.**

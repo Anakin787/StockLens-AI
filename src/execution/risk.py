@@ -18,7 +18,7 @@ constructing a context rather than by mocking a broker.
 """
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from decimal import Decimal
 
@@ -60,6 +60,17 @@ class RiskLimits:
     #: Checked against the position the order would *result in*, not the
     #: order alone - otherwise ten small buys quietly build one huge position.
     max_position_weight: Decimal = Decimal("0.20")
+
+    #: Per-symbol exceptions to ``max_position_weight``, keyed by symbol. A
+    #: concentrated strategy piling into one index ETF is a plan, not a bug -
+    #: but that exception belongs in config, as a fact about that symbol, not
+    #: in a strategy quietly assuming the gate will let it through.
+    max_position_weight_overrides: dict = field(default_factory=dict)
+
+    #: Below this equity, the weight check does not run at all. A strategy's
+    #: first-ever order is, by definition, 100% of the account; without this
+    #: exemption a concentrated strategy could never place one.
+    weight_check_min_equity_krw: Decimal = Decimal("3000000")
 
     high_value_threshold_krw: Decimal = HIGH_VALUE_THRESHOLD_KRW
 
@@ -365,19 +376,27 @@ class RiskGate:
         equity = ctx.equity_krw
         if equity <= ZERO:
             return None
+        # A strategy's very first order is, by definition, 100% of the
+        # account. Below this threshold there is nothing yet to concentrate,
+        # so the check would only ever block the strategy from ever starting.
+        if equity < limits.weight_check_min_equity_krw:
+            return None
 
         position = ctx.position(signal.symbol)
         held_krw = ZERO
         if position is not None:
             held_krw = ctx.to_krw(position.evaluation, position.currency) or ZERO
 
+        cap = limits.max_position_weight_overrides.get(
+            signal.symbol, limits.max_position_weight
+        )
         weight = (held_krw + notional_krw) / equity
-        if weight > limits.max_position_weight:
+        if weight > cap:
             return _reject(
                 signal,
                 "position-weight-limit",
                 f"매수 후 {signal.symbol} 비중이 {weight:.1%}가 되어 "
-                f"한도({limits.max_position_weight:.1%})를 넘습니다.",
+                f"한도({cap:.1%})를 넘습니다.",
             )
         return None
 

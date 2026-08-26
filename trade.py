@@ -11,6 +11,7 @@ trade - or, worse, runs twice. They also want different schedules.
 
 import argparse
 import sys
+from datetime import date, timedelta
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -19,12 +20,16 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from src.config import load_config
+from src.data.cache import BarCache
+from src.data.loader import HistoryLoader
+from src.data.yahoo import YahooBarSource
 from src.execution.context import build_context
 from src.execution.executor import OrderExecutor
 from src.execution.risk import RiskGate
 from src.pipeline import PortfolioService
 from src.store.repo import Store
 from src.strategy.loader import load_strategies
+from src.strategy.universe import Universe
 from src.toss.errors import TossError
 from src.toss.trading import TradingMode, build_trading_api
 
@@ -33,6 +38,51 @@ EXIT_DISABLED = 1
 EXIT_TOSS_ERROR = 2
 EXIT_UNEXPECTED = 3
 EXIT_LIVE_BLOCKED = 4
+
+#: Long enough for a 252-day momentum lookback plus its skip and a trend SMA,
+#: with room to spare. Longer than any strategy needs costs one extra request
+#: per symbol per run, not correctness.
+HISTORY_LOOKBACK_DAYS = 400
+
+
+def _strategy_symbols(strategies):
+    """Every symbol any loaded strategy might want priced or ranked.
+
+    Read from each strategy's own ``universe``/``params.benchmark`` rather
+    than from config directly - a strategy with no such attributes (one that
+    does not use the universe module at all) is simply skipped, not an error.
+    """
+    symbols = set()
+    for strategy in strategies:
+        universe = getattr(strategy, "universe", None)
+        if isinstance(universe, Universe):
+            symbols.update(universe.symbols())
+        benchmark = getattr(getattr(strategy, "params", None), "benchmark", None)
+        if benchmark:
+            symbols.add(benchmark)
+    return symbols
+
+
+def _load_history(config, symbols):
+    """Cached daily bars for every symbol a strategy might need.
+
+    A data outage here must degrade the run to "no signals" - a strategy with
+    an empty ``history`` simply produces nothing - rather than crash the
+    trading batch. yfinance itself, and the network under it, can fail in
+    more ways than this module can enumerate, so the catch is deliberately
+    broad.
+    """
+    if not symbols:
+        return {}
+    try:
+        cache = BarCache(config.db_path)
+        loader = HistoryLoader(cache, source=YahooBarSource(), offline=False)
+        end = date.today()
+        start = end - timedelta(days=HISTORY_LOOKBACK_DAYS)
+        return loader.load(sorted(symbols), start, end)
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        print(f"!!! 과거 시세 로딩 실패 - 히스토리 없이 진행합니다: {exc}")
+        return {}
 
 
 def parse_args(argv=None):
@@ -97,9 +147,19 @@ def run(argv=None):
     store = Store(config.db_path)
     service = PortfolioService(config)
     try:
+        universe_symbols = _strategy_symbols(strategies)
+        if universe_symbols:
+            print(f">>> 과거 시세 준비 중... ({sorted(universe_symbols)})")
+        history = _load_history(config, universe_symbols)
+
         print(">>> 컨텍스트 수집 중 (시세·잔고·장 운영시간)...")
         ctx = build_context(
-            service, store, kill_switch_path=config.trading.kill_switch_path
+            service,
+            store,
+            symbols=sorted(universe_symbols),
+            kill_switch_path=config.trading.kill_switch_path,
+            history=history,
+            recent=store.recent_signals(limit=50),
         )
         if ctx.kill_switch:
             print("!!! KILL_SWITCH가 활성화되어 있습니다. 모든 신호가 거부됩니다.")

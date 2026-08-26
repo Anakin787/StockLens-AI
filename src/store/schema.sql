@@ -129,3 +129,31 @@ CREATE TABLE IF NOT EXISTS fills (
     tax         TEXT,
     PRIMARY KEY (order_id, ts, quantity, price)
 );
+
+-- Daily OHLC cache for backtesting (step [6]). Money as TEXT, same rule as
+-- everywhere else - a cached price is still a price.
+CREATE TABLE IF NOT EXISTS daily_bars (
+    symbol      TEXT NOT NULL,
+    date        TEXT NOT NULL,     -- YYYY-MM-DD
+    open        TEXT NOT NULL,
+    high        TEXT NOT NULL,
+    low         TEXT NOT NULL,
+    close       TEXT NOT NULL,     -- split/dividend adjusted
+    raw_close   TEXT,              -- as the session actually printed
+    volume      TEXT,
+    source      TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (symbol, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_bars_symbol_date ON daily_bars (symbol, date);
+
+-- One row per symbol: what range the cache believes it holds, so a refresh
+-- only asks the source for what is missing rather than the whole history.
+CREATE TABLE IF NOT EXISTS bar_coverage (
+    symbol      TEXT PRIMARY KEY,
+    first_date  TEXT,
+    last_date   TEXT,
+    source      TEXT,
+    fetched_at  TEXT
+);

@@ -7,3 +7,6 @@ feedparser
 google-genai
 fastapi
 uvicorn
+# Only for backtesting and historical-bar refresh (src/data/, scripts/backtest.py) -
+# never imported by main.py or trade.py's own startup path.
+yfinance

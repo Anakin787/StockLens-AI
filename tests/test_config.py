@@ -325,3 +325,57 @@ def test_a_non_numeric_limit_is_rejected():
 
     with pytest.raises(TossConfigError):
         _parse_trading({"limits": {"max_daily_notional_krw": "많이"}})
+
+
+def test_weight_overrides_parse_into_decimals(tmp_path):
+    from decimal import Decimal
+
+    from src.config import _parse_trading
+
+    trading = _parse_trading(
+        {
+            "limits": {
+                "max_position_weight_overrides": {"QQQ": 0.6, "QLD": 0.2},
+                "weight_check_min_equity_krw": 2000000,
+            }
+        }
+    )
+    limits = trading.risk_limits()
+    assert limits.max_position_weight_overrides == {
+        "QQQ": Decimal("0.6"),
+        "QLD": Decimal("0.2"),
+    }
+    assert isinstance(limits.weight_check_min_equity_krw, Decimal)
+
+
+def test_weight_overrides_must_be_a_mapping():
+    from src.config import _parse_trading
+    from src.toss.errors import TossConfigError
+
+    with pytest.raises(TossConfigError):
+        _parse_trading({"limits": {"max_position_weight_overrides": ["QQQ"]}})
+
+
+def test_universe_rows_are_validated_at_load_time():
+    from src.config import _parse_trading
+    from src.toss.errors import TossConfigError
+
+    # 3x is a policy violation the universe module raises on, wrapped here as
+    # a config error so it fails at startup, before any signal is evaluated.
+    with pytest.raises(TossConfigError):
+        _parse_trading({"universe": [{"symbol": "TQQQ", "leverage": 3}]})
+
+
+def test_valid_universe_rows_pass_through_to_trading_config():
+    from src.config import _parse_trading
+
+    rows = [{"symbol": "QLD", "leverage": 2, "max_weight": 0.15}]
+    trading = _parse_trading({"universe": rows})
+    assert trading.universe == rows
+
+
+def test_strategy_params_pass_through_unvalidated():
+    from src.config import _parse_trading
+
+    trading = _parse_trading({"strategy_params": {"top_n": 2, "rebalance_weekday": 0}})
+    assert trading.strategy_params == {"top_n": 2, "rebalance_weekday": 0}

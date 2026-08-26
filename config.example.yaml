@@ -78,12 +78,34 @@ trading:
   # evaluate(ctx) -> list[Signal] 안에서 I/O를 하면 안 됩니다 — 그 순수성이
   # 백테스트의 전제입니다.
   strategies: []
-  # - src.strategy.my_strategy:MyStrategy
+  # - src.strategy.momentum_dca:MomentumDcaStrategy
 
   limits:
     max_orders_per_day: 10              # 일일 주문 건수
     max_daily_notional_krw: 5000000     # 일일 누적 주문금액
-    max_position_weight: 0.20           # 종목당 최대 비중 (주문 "후" 기준)
+    max_position_weight: 0.20           # 종목당 최대 비중 (주문 "후" 기준, 기본값)
+
+    # 종목별 예외. 집중형 전략(예: momentum_dca)은 지수 ETF 한 종목에 비중이
+    # 몰리는 것이 계획이지, 버그가 아닙니다 — 그 예외는 전략의 주장이 아니라
+    # 여기 적힌 사실이어야 합니다. momentum_dca를 쓴다면 아래 예시를 참고하세요.
+    max_position_weight_overrides: {}
+    # QQQ: 0.65
+    # AAPL: 0.40
+    # MSFT: 0.40
+    # NVDA: 0.40
+    # GOOGL: 0.40
+    # AMZN: 0.40
+    # META: 0.40
+    # TSLA: 0.40
+    # SOXX: 0.40
+    # SMH: 0.40
+    # QLD: 0.20   # 2배 레버리지 — 개별주보다 더 타이트하게
+    # SSO: 0.20
+
+    # 이 금액 미만이면 비중 검사를 건너뜁니다. 전략의 첫 매수는 정의상 비중
+    # 100%이므로, 이 면제가 없으면 시드가 작은 집중형 전략은 시작조차
+    # 못 합니다.
+    weight_check_min_equity_krw: 3000000
 
     # 1억 이상 주문은 confirmHighValueOrder가 필요합니다. 자동으로 켜지
     # 않습니다 — 켤 수 있는 봇은 버그 하나 거리에 있습니다.
@@ -92,3 +114,20 @@ trading:
     # 검증할 데이터가 없을 때(시세·캘린더·주문가능금액 조회 실패)의 태도.
     # true면 거부합니다. 확인하지 못한 주문은 안전한 주문이 아닙니다.
     strict: true
+
+  # momentum_dca 등 전략별 파라미터. 전략마다 필요한 키가 다르므로 여기서는
+  # 검증하지 않습니다 — 알 수 없는 키를 거부하는 건 각 전략의 from_config 몫.
+  strategy_params: {}
+  # top_n: 2
+  # rebalance_weekday: 0        # 0=월요일
+  # dislocation_drawdown: 0.08
+  # cash_reserve: 0.05
+
+  # momentum_dca가 다룰 유니버스. 비워두면 코드 기본값
+  # (src/strategy/universe.py의 DEFAULT_UNIVERSE)을 씁니다. 3배 이상 레버리지,
+  # 인버스, 개별종목 레버리지 ETF(NVDL·TSLL 등)는 여기 적어도 로드 시점에
+  # 거부됩니다 — src/strategy/universe.py의 정책 참조.
+  universe: []
+  # - {symbol: AAPL, name: Apple, kind: STOCK, max_weight: 0.35}
+  # - {symbol: QQQ, name: "Invesco QQQ", kind: INDEX_ETF, max_weight: 0.60}
+  # - {symbol: QLD, name: "ProShares Ultra QQQ", kind: INDEX_ETF, leverage: 2, max_weight: 0.15}

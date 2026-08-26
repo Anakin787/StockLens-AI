@@ -15,8 +15,13 @@ from src.strategy.base import Strategy
 from src.toss.errors import TossConfigError
 
 
-def load_strategy(path):
-    """Import and instantiate one ``module:Class`` path."""
+def load_strategy(path, trading_config=None):
+    """Import and instantiate one ``module:Class`` path.
+
+    ``trading_config`` is passed to the strategy's ``from_config`` so it can
+    pull its own universe and parameters out of config - the loader itself
+    stays ignorant of what any given strategy needs.
+    """
     if ":" not in path:
         raise TossConfigError(
             f"전략 경로는 'module:Class' 형식이어야 합니다: {path!r} "
@@ -42,9 +47,11 @@ def load_strategy(path):
             "list[Signal], I/O 없음)이 백테스트의 전제입니다."
         )
 
-    return factory()
+    return factory.from_config(trading_config)
 
 
 def load_strategies(trading_config):
     """Import every strategy named in ``trading.strategies``."""
-    return [load_strategy(path) for path in trading_config.strategies]
+    return [
+        load_strategy(path, trading_config) for path in trading_config.strategies
+    ]

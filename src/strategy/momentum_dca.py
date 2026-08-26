@@ -1,0 +1,490 @@
+"""Momentum-weighted, concentrated dollar-cost averaging.
+
+The brief this implements: a small account, ~50-100만원 arriving monthly, that
+wants to be aggressive without being reckless. "Aggressive" here means
+concentration - new cash goes to the one or two names with the strongest
+recent trend rather than being split evenly - not leverage beyond 2x and not a
+wide stop-loss grid (see :mod:`src.strategy.universe` for the leverage policy;
+per-position stop-losses are a parameter here, defaulted off, deliberately
+left for a later backtest to justify rather than assumed).
+
+The one downside guard this strategy does carry is a trend filter: leveraged
+instruments (2x index funds) are only ever bought, and are sold out of
+entirely, based on whether the benchmark is above its own long moving average.
+A 1x position is never sold on a trend signal - timing the DCA's core holding
+off a single moving-average cross has a mixed record at best, and would strand
+a month's contribution in cash for no proven benefit. A 2x position's decay is
+what the trend filter exists to avoid.
+"""
+
+from dataclasses import dataclass
+from datetime import date as date_type
+from decimal import ROUND_DOWN, Decimal
+
+from src.models import ZERO
+from src.strategy.base import ORDER_MARKET, SIDE_BUY, SIDE_SELL, Signal, Strategy
+from src.strategy.indicators import drawdown_from_high, realized_vol, sma, total_return
+from src.strategy.universe import DEFAULT_UNIVERSE, parse_universe
+from src.toss.errors import TossConfigError
+
+ONE = Decimal("1")
+CENT = Decimal("0.01")
+
+MODE_WEEKLY = "weekly"
+MODE_DISLOCATION = "dislocation"
+
+
+class StrategyParamError(ValueError):
+    """The strategy's own parameters are internally inconsistent."""
+
+
+def _dec(value, name):
+    try:
+        return Decimal(str(value))
+    except Exception:
+        raise TossConfigError(f"strategy_params.{name} 값을 숫자로 읽을 수 없습니다: {value!r}") from None
+
+
+@dataclass(frozen=True)
+class MomentumDcaParams:
+    """Every number this strategy uses, named, defaulted, and overridable.
+
+    Defaults are the agreed starting point, not a claim they are optimal -
+    step 8 of the plan is running these through the backtest, in and out of
+    sample, before trusting any of them with real money.
+    """
+
+    # --- ranking ---
+    #: (lookback_days, weight) pairs. Blends a ~3-month, ~6-month and ~1-year
+    #: view rather than betting the rank on any single window.
+    lookbacks: tuple = ((63, Decimal("0.5")), (126, Decimal("0.3")), (252, Decimal("0.2")))
+    #: Most recent week excluded from every lookback - short-term reversal is
+    #: common enough that the last few days often point the wrong way.
+    skip_days: int = 5
+    vol_adjust: bool = True
+    vol_window: int = 63
+    #: Negative momentum is never a buy candidate, regardless of rank.
+    min_score: Decimal = Decimal("0")
+
+    # --- concentration ---
+    top_n: int = 2
+    weights: tuple = (Decimal("0.65"), Decimal("0.35"))
+    fallback_symbol: str = "QQQ"
+
+    # --- trend filter (the leverage gate) ---
+    benchmark: str = "QQQ"
+    trend_sma: int = 200
+    leverage_requires_trend: bool = True
+    leverage_max_vol: Decimal = Decimal("0.35")
+
+    # --- rhythm ---
+    rebalance_weekday: int = 0  # Monday
+    dislocation_enabled: bool = True
+    dislocation_day_drop: Decimal = Decimal("-0.03")
+    dislocation_sigma: Decimal = Decimal("2.5")
+    dislocation_drawdown: Decimal = Decimal("0.08")
+    dislocation_window: int = 20
+    dislocation_cooldown_days: int = 5
+    dislocation_requires_trend: bool = True
+    dislocation_budget_multiple: Decimal = Decimal("2")
+
+    # --- sizing ---
+    cash_reserve: Decimal = Decimal("0.05")
+    min_order_usd: Decimal = Decimal("30")
+
+    #: A feed this many days stale is treated as absent, not as "the last
+    #: known price".
+    stale_days: int = 5
+
+    def __post_init__(self):
+        if len(self.weights) != self.top_n:
+            raise StrategyParamError(
+                f"weights 길이({len(self.weights)})가 top_n({self.top_n})과 다릅니다."
+            )
+        if sum(self.weights) > ONE:
+            raise StrategyParamError(f"weights 합이 1을 넘습니다: {sum(self.weights)}")
+
+    @property
+    def required_bars(self):
+        """Longest lookback this strategy ever reads, plus the skip."""
+        longest = max([lb for lb, _ in self.lookbacks] + [self.trend_sma, self.vol_window])
+        return longest + self.skip_days + 1
+
+    _FIELDS = None  # set below, after the class body
+
+    @classmethod
+    def from_mapping(cls, raw):
+        """Build params from ``trading_config.strategy_params``.
+
+        Unknown keys are an error, matching ``config.py``'s convention: a
+        typo'd parameter that is silently dropped looks, from the config
+        file, like it is in force.
+        """
+        raw = raw or {}
+        known = set(cls._FIELDS) | {"weights", "lookbacks"}
+        unknown = set(raw) - known
+        if unknown:
+            raise TossConfigError(
+                f"strategy_params에 알 수 없는 항목이 있습니다: {sorted(unknown)}. "
+                f"사용 가능: {sorted(known)}"
+            )
+
+        kwargs = {}
+        for name, kind in cls._FIELDS.items():
+            if name not in raw:
+                continue
+            value = raw[name]
+            if kind == "decimal":
+                kwargs[name] = _dec(value, name)
+            elif kind is bool:
+                kwargs[name] = bool(value)
+            elif kind is str:
+                kwargs[name] = str(value)
+            else:
+                try:
+                    kwargs[name] = int(value)
+                except (TypeError, ValueError):
+                    raise TossConfigError(
+                        f"strategy_params.{name} 값을 정수로 읽을 수 없습니다: {value!r}"
+                    ) from None
+
+        if "weights" in raw:
+            kwargs["weights"] = tuple(_dec(w, "weights") for w in raw["weights"])
+        if "lookbacks" in raw:
+            kwargs["lookbacks"] = tuple(
+                (int(lb), _dec(w, "lookbacks")) for lb, w in raw["lookbacks"]
+            )
+
+        try:
+            return cls(**kwargs)
+        except StrategyParamError as exc:
+            raise TossConfigError(f"strategy_params 설정 오류: {exc}") from exc
+
+
+MomentumDcaParams._FIELDS = {
+    "skip_days": int,
+    "vol_adjust": bool,
+    "vol_window": int,
+    "min_score": "decimal",
+    "top_n": int,
+    "fallback_symbol": str,
+    "benchmark": str,
+    "trend_sma": int,
+    "leverage_requires_trend": bool,
+    "leverage_max_vol": "decimal",
+    "rebalance_weekday": int,
+    "dislocation_enabled": bool,
+    "dislocation_day_drop": "decimal",
+    "dislocation_sigma": "decimal",
+    "dislocation_drawdown": "decimal",
+    "dislocation_window": int,
+    "dislocation_cooldown_days": int,
+    "dislocation_requires_trend": bool,
+    "dislocation_budget_multiple": "decimal",
+    "cash_reserve": "decimal",
+    "min_order_usd": "decimal",
+    "stale_days": int,
+}
+
+
+def _entry_date(entry):
+    from src.strategy.bars import as_date
+
+    value = entry.get("ts") or entry.get("date")
+    if not value:
+        return None
+    try:
+        return as_date(value)
+    except Exception:
+        return None
+
+
+def _entry_meta(entry):
+    meta = entry.get("meta")
+    if isinstance(meta, dict):
+        return meta
+    payload = entry.get("payload")
+    if payload:
+        import json
+
+        try:
+            return json.loads(payload)
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+class MomentumDcaStrategy(Strategy):
+    """Rank the universe by risk-adjusted momentum; concentrate new cash into
+    the top names; gate leverage on trend; exit leverage when trend breaks."""
+
+    name = "momentum-dca"
+
+    def __init__(self, universe=None, params=None):
+        self.universe = universe or DEFAULT_UNIVERSE
+        self.params = params or MomentumDcaParams()
+
+    @classmethod
+    def from_config(cls, trading_config=None):
+        universe_rows = getattr(trading_config, "universe", None) if trading_config else None
+        params_raw = getattr(trading_config, "strategy_params", None) if trading_config else None
+        return cls(
+            universe=parse_universe(universe_rows),
+            params=MomentumDcaParams.from_mapping(params_raw),
+        )
+
+    # ---------------------------------------------------------- evaluate
+
+    def evaluate(self, ctx):
+        p = self.params
+        today = ctx.now.date() if hasattr(ctx.now, "date") else ctx.now
+
+        benchmark_history = ctx.bars(p.benchmark)
+        trend_up, bench_closes = self._trend(benchmark_history, today, p)
+        if trend_up is None:
+            # No benchmark, no trend filter, no trading - the leverage gate
+            # cannot be applied to data that does not exist.
+            return []
+
+        signals = list(self._exit_signals(ctx, today, trend_up))
+
+        mode = self._mode(ctx, today, trend_up, bench_closes, p)
+        if mode is None:
+            return signals
+
+        signals.extend(self._buy_signals(ctx, today, trend_up, bench_closes, mode, p))
+        return signals
+
+    # ------------------------------------------------------------- trend
+
+    def _trend(self, history, today, p):
+        """(is_above_its_sma, closes) for the benchmark, or (None, ()) if unknown.
+
+        ``None`` - not ``False`` - means "cannot tell", and every caller below
+        treats "cannot tell" as a reason to do nothing with leverage, not as
+        permission.
+        """
+        if history is None or history.is_stale(today, p.stale_days):
+            return None, ()
+        closes = history.closes()
+        average = sma(closes, p.trend_sma)
+        if average is None:
+            return None, closes
+        return closes[-1] > average, closes
+
+    # -------------------------------------------------------------- exits
+
+    def _exit_signals(self, ctx, today, trend_up):
+        """Sell every held leveraged instrument when the trend breaks.
+
+        Only instruments this strategy's universe marks as leveraged are
+        touched - a leveraged fund the account holds from before this
+        strategy existed, but which is not in the universe (single-stock
+        leverage, say), is left alone; this strategy does not manage it.
+        """
+        if trend_up is not False:  # None (unknown) or True: no forced exit
+            return
+        for symbol, position in ctx.positions.items():
+            instrument = self.universe.get(symbol)
+            if instrument is None or not instrument.is_leveraged:
+                continue
+            if position.quantity <= ZERO:
+                continue
+            yield Signal(
+                strategy=self.name,
+                symbol=symbol,
+                side=SIDE_SELL,
+                order_type=ORDER_MARKET,
+                quantity=position.quantity,
+                currency=position.currency,
+                reason=(
+                    f"추세 이탈 — {self.params.benchmark}가 {self.params.trend_sma}일선 "
+                    "아래로 내려가 레버리지 포지션을 청산합니다."
+                ),
+                meta={"mode": "trend-exit", "benchmark": self.params.benchmark},
+            )
+
+    # --------------------------------------------------------------- mode
+
+    def _mode(self, ctx, today, trend_up, bench_closes, p):
+        weekday = today.weekday() if isinstance(today, date_type) else ctx.now.weekday()
+        if weekday == p.rebalance_weekday:
+            return MODE_WEEKLY
+        if p.dislocation_enabled and self._dislocation_fires(
+            ctx, today, trend_up, bench_closes, p
+        ):
+            return MODE_DISLOCATION
+        return None
+
+    def _dislocation_fires(self, ctx, today, trend_up, bench_closes, p):
+        if not bench_closes:
+            return False
+        if p.dislocation_requires_trend and trend_up is not True:
+            return False
+
+        day_return = total_return(bench_closes, 1, skip=0)
+        drawdown = drawdown_from_high(bench_closes, p.dislocation_window)
+        if day_return is None or drawdown is None:
+            return False
+        if drawdown < p.dislocation_drawdown:
+            return False
+
+        daily_vol = realized_vol(bench_closes, p.vol_window, annualize=False)
+        crashed = day_return <= p.dislocation_day_drop
+        if not crashed and daily_vol is not None:
+            crashed = day_return <= -p.dislocation_sigma * daily_vol
+        if not crashed:
+            return False
+
+        last_dislocation = self._last_dislocation_date(ctx)
+        if last_dislocation is not None:
+            if (today - last_dislocation).days < p.dislocation_cooldown_days:
+                return False
+        return True
+
+    def _last_dislocation_date(self, ctx):
+        latest = None
+        for entry in ctx.recent or ():
+            if not isinstance(entry, dict) or entry.get("strategy") != self.name:
+                continue
+            if _entry_meta(entry).get("mode") != MODE_DISLOCATION:
+                continue
+            entry_date = _entry_date(entry)
+            if entry_date is not None and (latest is None or entry_date > latest):
+                latest = entry_date
+        return latest
+
+    # ---------------------------------------------------------- ranking
+
+    def _rank(self, ctx, today, trend_up, p):
+        """Eligible instruments in descending score order, with their score."""
+        allow_leverage = self._leverage_allowed(ctx, trend_up, p)
+        ranked = []
+        for instrument in self.universe.tradable(allow_leverage=True):
+            if instrument.is_leveraged and not allow_leverage:
+                continue
+            history = ctx.bars(instrument.symbol)
+            if history is None or history.is_stale(today, p.stale_days):
+                continue
+            if len(history) < p.required_bars:
+                continue
+            score = self._score(history.closes(), p)
+            if score is None or score <= p.min_score:
+                continue
+            ranked.append((instrument, score))
+        ranked.sort(key=lambda pair: pair[1], reverse=True)
+        return ranked
+
+    def _leverage_allowed(self, ctx, trend_up, p):
+        if p.leverage_requires_trend and trend_up is not True:
+            return False
+        benchmark_history = ctx.bars(p.benchmark)
+        if benchmark_history is None:
+            return False
+        vol = realized_vol(benchmark_history.closes(), p.vol_window)
+        # Unverifiable volatility is treated as "too risky to lever", the same
+        # strict-by-default posture the risk gate takes for missing data.
+        return vol is not None and vol <= p.leverage_max_vol
+
+    def _score(self, closes, p):
+        score = ZERO
+        for lookback, weight in p.lookbacks:
+            r = total_return(closes, lookback, skip=p.skip_days)
+            if r is None:
+                return None
+            score += weight * r
+        if p.vol_adjust:
+            vol = realized_vol(closes, p.vol_window)
+            if not vol:
+                return None
+            score = score / vol
+        return score
+
+    # ------------------------------------------------------------ sizing
+
+    def _buy_signals(self, ctx, today, trend_up, bench_closes, mode, p):
+        ranked = self._rank(ctx, today, trend_up, p)
+        allocations = self._allocate(ctx, today, trend_up, ranked, p)
+        if not allocations:
+            return
+
+        budget = self._budget(ctx, mode, p)
+        if budget < p.min_order_usd:
+            return
+
+        for instrument, weight, score in allocations:
+            amount = (weight * budget).quantize(CENT, rounding=ROUND_DOWN)
+            amount = self._clip_to_max_weight(ctx, instrument, amount)
+            if amount < p.min_order_usd:
+                continue
+            yield Signal(
+                strategy=self.name,
+                symbol=instrument.symbol,
+                side=SIDE_BUY,
+                order_type=ORDER_MARKET,
+                amount=amount,
+                currency="USD",
+                reason=(
+                    f"{mode} 배분 — {instrument.symbol} 점수 {score:.4f} "
+                    f"({', '.join(str(lb) for lb, _ in p.lookbacks)}일 가중 모멘텀)"
+                ),
+                meta={
+                    "mode": mode,
+                    "score": str(score),
+                    "weight": str(weight),
+                    "budget_usd": str(budget),
+                    "trend_up": trend_up,
+                },
+            )
+
+    def _allocate(self, ctx, today, trend_up, ranked, p):
+        top = ranked[: p.top_n]
+        allocations = [
+            (instrument, weight, score)
+            for (instrument, score), weight in zip(top, p.weights)
+        ]
+
+        remaining_weight = sum(p.weights[len(top) :])
+        already = {instrument.symbol for instrument, _, _ in allocations}
+        if remaining_weight > ZERO and p.fallback_symbol not in already:
+            fallback = self.universe.get(p.fallback_symbol)
+            if fallback is not None:
+                allow_leverage = self._leverage_allowed(ctx, trend_up, p)
+                if not fallback.is_leveraged or allow_leverage:
+                    history = ctx.bars(fallback.symbol)
+                    if (
+                        history is not None
+                        and not history.is_stale(today, p.stale_days)
+                        and len(history) >= p.required_bars
+                    ):
+                        score = self._score(history.closes(), p)
+                        if score is not None:
+                            allocations.append((fallback, remaining_weight, score))
+        return allocations
+
+    def _budget(self, ctx, mode, p):
+        usd_power = ctx.buying_power.get("USD") or ZERO
+        budget = usd_power * (ONE - p.cash_reserve)
+        if mode == MODE_DISLOCATION:
+            budget = budget * p.dislocation_budget_multiple
+        return max(min(budget, usd_power), ZERO)
+
+    def _clip_to_max_weight(self, ctx, instrument, amount):
+        """Shrink ``amount`` so the post-buy weight stays under this
+        instrument's own cap - the strategy enforcing its own plan, ahead of
+        the risk gate's looser backstop (see config: max_position_weight)."""
+        equity = ctx.equity_krw
+        rate = ctx.exchange_rate
+        if equity <= ZERO or not rate:
+            return amount  # cannot verify - leave the risk gate to catch it
+
+        position = ctx.position(instrument.symbol)
+        held_krw = ZERO
+        if position is not None:
+            held_krw = ctx.to_krw(position.evaluation, position.currency) or ZERO
+
+        cap_krw = instrument.max_weight * equity - held_krw
+        if cap_krw <= ZERO:
+            return ZERO
+        cap_usd = (cap_krw / rate).quantize(CENT, rounding=ROUND_DOWN)
+        return min(amount, cap_usd)

@@ -186,6 +186,30 @@ class StrategyContext:
     daily_usage: DailyUsage = field(default_factory=DailyUsage)
     kill_switch: bool = False
 
+    #: symbol -> PriceHistory, ending at (and including) the most recent
+    #: completed session at or before ``now``. Populated by the context
+    #: builder - live or backtest - never fetched here: an indicator a
+    #: strategy computes from this is reproducible, one it fetches is not.
+    #: Appended last, defaulted, so every existing construction site (live
+    #: and test) keeps working with no history at all.
+    history: dict = field(default_factory=dict)  # symbol -> PriceHistory
+
+    #: Recent signals this strategy has already produced, oldest first, as the
+    #: caller read them back from storage (or, in a backtest, from its own
+    #: run so far). Exists so a rule that needs a cooldown - "don't buy the
+    #: dip again for five days" - can read that state instead of a strategy
+    #: keeping it, which purity forbids.
+    recent: tuple = ()
+
+    def bars(self, symbol):
+        """The PriceHistory for ``symbol``, or None if none was supplied."""
+        return self.history.get(symbol)
+
+    def closes(self, symbol, n=None):
+        """Adjusted closes for ``symbol``, oldest first, or () if unknown."""
+        history = self.bars(symbol)
+        return history.closes(n) if history else ()
+
     @property
     def positions(self):
         """``{symbol: Position}`` for everything currently held.
@@ -234,6 +258,18 @@ class Strategy(ABC):
     #: Written to ``Signal.strategy`` and to every order this strategy places,
     #: so per-strategy performance can be attributed later.
     name = "unnamed"
+
+    @classmethod
+    def from_config(cls, trading_config=None):
+        """Build this strategy from config.
+
+        Config is read here, once, at construction - never inside
+        ``evaluate``. Override this to pull a universe or parameters out of
+        ``trading_config`` (see ``TradingConfig.universe`` and
+        ``.strategy_params``); the default ignores config entirely, so a
+        strategy with no parameters needs no override.
+        """
+        return cls()
 
     @abstractmethod
     def evaluate(self, ctx):

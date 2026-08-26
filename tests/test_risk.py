@@ -178,6 +178,50 @@ def test_selling_is_never_blocked_by_concentration():
     assert evaluate(signal, context(), limits).approved
 
 
+def test_per_symbol_override_permits_a_concentration_the_default_forbids():
+    # Same 22% buy as above, but this symbol has a config exception.
+    signal = buy(quantity=Decimal("21"), limit_price=Decimal("71500"))
+    limits = RiskLimits(
+        max_daily_notional_krw=Decimal("99999999"),
+        max_position_weight_overrides={"005930": Decimal("0.60")},
+    )
+    assert evaluate(signal, context(), limits).approved
+
+
+def test_override_does_not_relax_the_limit_for_a_different_symbol():
+    signal = buy(quantity=Decimal("21"), limit_price=Decimal("71500"))
+    limits = RiskLimits(
+        max_daily_notional_krw=Decimal("99999999"),
+        max_position_weight_overrides={"AAPL": Decimal("0.60")},
+    )
+    assert rule_of(evaluate(signal, context(), limits)) == "position-weight-limit"
+
+
+def test_small_equity_is_exempt_from_the_weight_check():
+    # A first-ever buy is, by definition, ~100% of the account - exactly the
+    # case the small-equity exemption exists to let through.
+    snapshot = PortfolioSnapshot(
+        positions=[], exchange_rate=RATE, total_krw=Decimal("700000")
+    )
+    ctx = context(snapshot=snapshot)
+    signal = buy(quantity=Decimal("10"))
+    limits = RiskLimits(
+        max_daily_notional_krw=Decimal("99999999"),
+        weight_check_min_equity_krw=Decimal("3000000"),
+    )
+    decision = evaluate(signal, ctx, limits)
+    assert rule_of(decision) != "position-weight-limit"
+
+
+def test_weight_check_reapplies_above_the_small_equity_threshold():
+    signal = buy(quantity=Decimal("21"), limit_price=Decimal("71500"))
+    limits = RiskLimits(
+        max_daily_notional_krw=Decimal("99999999"),
+        weight_check_min_equity_krw=Decimal("1"),
+    )
+    assert rule_of(evaluate(signal, context(), limits)) == "position-weight-limit"
+
+
 # ------------------------------------------------------------- sessions
 
 

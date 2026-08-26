@@ -243,7 +243,7 @@ CREATE TABLE fills (
 Phase 1  [1] toss/client.py  [2] account+market  [3] Position 병합  [4] 리포트 배선
             ↓
 Phase 2  [5] store/ SQLite + 리포트 실행 시 스냅샷 적재   ← 대시보드의 전제. 빨리 시작할수록 이력이 쌓임
-         [6] strategy/base.py + 백테스트 러너 (순수 함수 검증)
+         [6] strategy/base.py + 백테스트 러너 (순수 함수 검증) ✅ momentum_dca 전략 포함, 2026-08-26
          [7] execution/risk.py  (주문 코드보다 리스크 게이트를 먼저)
          [8] toss/trading.py + executor — PAPER 모드로만
          [9] reconciler + 조건주문(OCO) 연동
