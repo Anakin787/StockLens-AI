@@ -126,8 +126,13 @@ def strategy(**param_overrides):
 # ---------------------------------------------------------------- fixtures
 
 
-def _base_history(n=40):
-    """QQQ in a mild uptrend (trend filter passes), two candidates ranked."""
+def _base_history(n=41):
+    """QQQ in a mild uptrend (trend filter passes), two candidates ranked.
+
+    Default ``n`` lands the last bar on a Monday (START is a Wednesday), so
+    the strategy - which now takes its session date from the benchmark's last
+    bar, not the wall clock - sees a weekly-rebalance day.
+    """
     return {
         "QQQ": trending("QQQ", n, "0.001", start_price=100),
         "AAA": trending("AAA", n, "0.02", start_price=50),  # strong momentum
@@ -140,9 +145,8 @@ def _base_history(n=40):
 
 def test_same_context_twice_gives_identical_signals():
     history = _base_history()
-    monday = START + timedelta(days=39)
-    monday = monday - timedelta(days=monday.weekday())  # snap to a Monday
-    now = datetime(monday.year, monday.month, monday.day, 9, 0)
+    last = history["QQQ"].last_date  # a Monday - the weekly rebalance fires
+    now = datetime(last.year, last.month, last.day, 9, 0)
     ctx = context(now, history)
     s = strategy()
     first = s.evaluate(ctx)
@@ -156,9 +160,8 @@ def test_same_context_twice_gives_identical_signals():
 
 def test_top_ranked_symbol_gets_the_larger_weight():
     history = _base_history()
-    monday = START + timedelta(days=39)
-    monday = monday - timedelta(days=monday.weekday())
-    now = datetime(monday.year, monday.month, monday.day)
+    last = history["QQQ"].last_date  # a Monday - the weekly rebalance fires
+    now = datetime(last.year, last.month, last.day)
     signals = strategy().evaluate(context(now, history))
     by_symbol = {s.symbol: s for s in signals if s.side == SIDE_BUY}
     assert "AAA" in by_symbol and "BBB" in by_symbol
@@ -169,11 +172,12 @@ def test_top_ranked_symbol_gets_the_larger_weight():
 
 
 def test_no_signal_on_a_non_rebalance_non_dislocation_day():
-    history = _base_history()
-    # A Tuesday, no crash - neither trigger fires.
-    tuesday = START + timedelta(days=39)
-    tuesday = tuesday - timedelta(days=tuesday.weekday()) + timedelta(days=1)
-    now = datetime(tuesday.year, tuesday.month, tuesday.day)
+    # n=40 lands the last bar on a Sunday (non-rebalance), no crash - neither
+    # trigger fires.
+    history = _base_history(40)
+    last = history["QQQ"].last_date
+    assert last.weekday() != 0
+    now = datetime(last.year, last.month, last.day)
     signals = strategy().evaluate(context(now, history))
     assert signals == []
 
@@ -230,15 +234,19 @@ def test_dislocation_does_not_fire_below_the_trend_sma():
     assert not any(s.meta.get("mode") == "dislocation" for s in signals if s.side == SIDE_BUY)
 
 
-def test_cooldown_suppresses_a_second_dislocation_buy():
+def _dislocation_history():
     base = flat_then_move(
         "QQQ", flat_n=25, flat_price=100, moves=[1.01] * 10 + [0.95]
     )
-    history = {
+    return base, {
         "QQQ": base,
         "AAA": trending("AAA", 36, "0.02", start_price=50),
         "BBB": trending("BBB", 36, "0.005", start_price=50),
     }
+
+
+def test_cooldown_suppresses_a_second_dislocation_buy():
+    base, history = _dislocation_history()
     last_day = START + timedelta(days=len(base) - 1)
     while last_day.weekday() == 0:
         last_day += timedelta(days=1)
@@ -257,20 +265,48 @@ def test_cooldown_suppresses_a_second_dislocation_buy():
     assert not any(s.meta.get("mode") == "dislocation" for s in signals if s.side == SIDE_BUY)
 
 
+def test_cooldown_reads_meta_from_the_live_payload_dict():
+    # The live store writes signal.meta straight through as a dict under the
+    # "payload" key (store.repo.save_decision); recent_signals() returns it
+    # unchanged. The cooldown must recognise a dislocation buy recorded that
+    # way, not just the backtest's "meta" key.
+    base, history = _dislocation_history()
+    last_day = START + timedelta(days=len(base) - 1)
+    while last_day.weekday() == 0:
+        last_day += timedelta(days=1)
+    now = datetime(last_day.year, last_day.month, last_day.day)
+    recent = [
+        {
+            "ts": (last_day - timedelta(days=1)).isoformat(),
+            "strategy": "momentum-dca",
+            "symbol": "AAA",
+            "payload": {"mode": "dislocation"},
+            "outcome": "accepted",
+        }
+    ]
+    signals = strategy(dislocation_drawdown=D("0.03")).evaluate(
+        context(now, history, recent=recent)
+    )
+    assert not any(s.meta.get("mode") == "dislocation" for s in signals if s.side == SIDE_BUY)
+
+
 # ------------------------------------------------------------ leverage gate
 
 
 def test_leveraged_instrument_excluded_from_ranking_when_trend_is_down():
-    down = flat_then_move("QQQ", flat_n=25, flat_price=100, moves=[0.99] * 15)
+    # 16 moves -> 41 bars -> last bar is a Monday, so the weekly rebalance
+    # fires and there are real buy signals to check QLD's absence in.
+    down = flat_then_move("QQQ", flat_n=25, flat_price=100, moves=[0.99] * 16)
     history = {
         "QQQ": down,
-        "AAA": trending("AAA", 40, "0.02", start_price=50),
-        "QLD": trending("QLD", 40, "0.05", start_price=50),
+        "AAA": trending("AAA", 41, "0.02", start_price=50),
+        "QLD": trending("QLD", 41, "0.05", start_price=50),
     }
-    monday = START + timedelta(days=len(down) - 1)
-    monday = monday - timedelta(days=monday.weekday())
-    now = datetime(monday.year, monday.month, monday.day)
+    last = down.last_date
+    assert last.weekday() == 0
+    now = datetime(last.year, last.month, last.day)
     signals = strategy().evaluate(context(now, history))
+    assert any(s.side == SIDE_BUY for s in signals)
     assert "QLD" not in {s.symbol for s in signals if s.side == SIDE_BUY}
 
 
@@ -286,6 +322,48 @@ def test_holding_is_sold_when_trend_breaks():
     assert len(sells) == 1
     assert sells[0].quantity == D("3")
     assert sells[0].meta["mode"] == "trend-exit"
+
+
+def test_trend_exit_is_not_repeated_while_the_prior_sell_is_in_flight():
+    # A downtrend that lasts several sessions: _exit_signals re-derives from
+    # scratch each run, and the position still shows the shares until the
+    # earlier sell settles (T+1..T+2). It must not re-propose the sell.
+    down = flat_then_move("QQQ", flat_n=25, flat_price=100, moves=[0.99] * 15)
+    history = {"QQQ": down}
+    last = down.last_date
+    now = datetime(last.year, last.month, last.day)
+    recent = [
+        {
+            "ts": (last - timedelta(days=1)).isoformat(),
+            "strategy": "momentum-dca",
+            "symbol": "QLD",
+            "payload": {"mode": "trend-exit"},
+            "outcome": "accepted",
+        }
+    ]
+    ctx = context(now, history, positions=[position("QLD", quantity="3")], recent=recent)
+    signals = strategy().evaluate(ctx)
+    assert not any(s.side == SIDE_SELL and s.symbol == "QLD" for s in signals)
+
+
+def test_trend_exit_resumes_once_the_exit_cooldown_has_passed():
+    down = flat_then_move("QQQ", flat_n=25, flat_price=100, moves=[0.99] * 15)
+    history = {"QQQ": down}
+    last = down.last_date
+    now = datetime(last.year, last.month, last.day)
+    recent = [
+        {
+            "ts": (last - timedelta(days=9)).isoformat(),  # older than exit_cooldown_days
+            "strategy": "momentum-dca",
+            "symbol": "QLD",
+            "payload": {"mode": "trend-exit"},
+            "outcome": "accepted",
+        }
+    ]
+    ctx = context(now, history, positions=[position("QLD", quantity="3")], recent=recent)
+    signals = strategy().evaluate(ctx)
+    sells = [s for s in signals if s.side == SIDE_SELL and s.symbol == "QLD"]
+    assert len(sells) == 1
 
 
 def test_non_leveraged_holding_is_never_sold_on_a_trend_signal():
@@ -304,9 +382,8 @@ def test_non_leveraged_holding_is_never_sold_on_a_trend_signal():
 
 def test_amount_never_exceeds_the_budget():
     history = _base_history()
-    monday = START + timedelta(days=39)
-    monday = monday - timedelta(days=monday.weekday())
-    now = datetime(monday.year, monday.month, monday.day)
+    last = history["QQQ"].last_date  # a Monday - the weekly rebalance fires
+    now = datetime(last.year, last.month, last.day)
     buying_power = {"USD": D("100")}
     signals = strategy().evaluate(context(now, history, buying_power=buying_power))
     total = sum(s.amount for s in signals if s.side == SIDE_BUY)
@@ -315,9 +392,8 @@ def test_amount_never_exceeds_the_budget():
 
 def test_amount_respects_the_instrument_max_weight():
     history = _base_history()
-    monday = START + timedelta(days=39)
-    monday = monday - timedelta(days=monday.weekday())
-    now = datetime(monday.year, monday.month, monday.day)
+    last = history["QQQ"].last_date  # a Monday - the weekly rebalance fires
+    now = datetime(last.year, last.month, last.day)
     tight_universe = Universe(
         (
             Instrument(symbol="QQQ", name="QQQ", kind=KIND_INDEX_ETF, max_weight=D("0.9")),
@@ -364,9 +440,8 @@ def test_dislocation_never_spends_below_the_cash_reserve():
 
 def test_max_deploy_cap_bounds_a_large_cash_pile():
     history = _base_history()
-    monday = START + timedelta(days=39)
-    monday = monday - timedelta(days=monday.weekday())
-    now = datetime(monday.year, monday.month, monday.day)
+    last = history["QQQ"].last_date  # a Monday - the weekly rebalance fires
+    now = datetime(last.year, last.month, last.day)
     s = strategy(max_deploy_per_week_usd=D("50"), cash_reserve=D("0"))
     signals = s.evaluate(
         context(now, history, buying_power={"USD": D("100000")})
@@ -380,13 +455,13 @@ def test_fallback_does_not_bypass_the_absolute_momentum_gate():
     # case min_score exists to keep the strategy out of. The fallback must
     # not silently deploy the whole budget into an equally unvetted QQQ.
     history = {
-        "QQQ": trending("QQQ", 40, "-0.01", start_price=100),
-        "AAA": trending("AAA", 40, "-0.02", start_price=50),
-        "BBB": trending("BBB", 40, "-0.015", start_price=50),
+        "QQQ": trending("QQQ", 41, "-0.01", start_price=100),
+        "AAA": trending("AAA", 41, "-0.02", start_price=50),
+        "BBB": trending("BBB", 41, "-0.015", start_price=50),
     }
-    monday = START + timedelta(days=39)
-    monday = monday - timedelta(days=monday.weekday())
-    now = datetime(monday.year, monday.month, monday.day)
+    last = history["QQQ"].last_date
+    assert last.weekday() == 0  # a rebalance day - so a buy is only withheld by min_score
+    now = datetime(last.year, last.month, last.day)
     signals = strategy().evaluate(context(now, history))
     assert not any(s.side == SIDE_BUY for s in signals)
 

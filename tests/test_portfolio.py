@@ -240,6 +240,55 @@ def test_manual_positions_get_a_profit_rate():
     assert position.name == "Apple Inc."
 
 
+def _manual_source(previous_closes=None, last_price="178.5"):
+    from src.config import ManualHolding
+    from src.sources.manual_source import ManualSource
+
+    return ManualSource(
+        FakeMarketApi(
+            prices={"AAPL": {"symbol": "AAPL", "lastPrice": last_price, "currency": "USD"}},
+            stocks={"AAPL": {"symbol": "AAPL", "name": "Apple Inc.", "marketCountry": "US"}},
+        ),
+        [ManualHolding(symbol="AAPL", qty=Decimal("10"), avg_price=Decimal("155.3"))],
+        previous_closes=previous_closes,
+    )
+
+
+def test_manual_daily_pnl_is_derived_from_the_supplied_previous_close():
+    # Toss does not report today's move for manual holdings; the caller
+    # injects the last completed close and this fills the same column.
+    position = _manual_source(previous_closes={"AAPL": Decimal("170")}).fetch()[0]
+
+    assert position.daily_profit_loss == Decimal("10") * (Decimal("178.5") - Decimal("170"))
+    assert position.daily_profit_rate == Decimal("8.5") / Decimal("170")
+
+
+def test_manual_daily_pnl_stays_absent_without_a_previous_close():
+    # Unknown, not zero - the aggregator omits it rather than reporting a
+    # confident "no change today".
+    position = _manual_source(previous_closes=None).fetch()[0]
+
+    assert position.daily_profit_loss is None
+    assert position.daily_profit_rate is None
+
+
+def test_manual_daily_pnl_needs_a_live_quote_not_a_static_price():
+    from src.config import ManualHolding
+    from src.sources.manual_source import ManualSource
+
+    # No price in the feed -> falls back to the config price. Comparing that
+    # to a market close is not a day's return, so daily P&L must stay absent.
+    source = ManualSource(
+        FakeMarketApi(prices={}, stocks={}),
+        [ManualHolding(symbol="XAU", qty=Decimal("1"), avg_price=Decimal("100"),
+                       price=Decimal("120"), currency="KRW")],
+        previous_closes={"XAU": Decimal("118")},
+    )
+    position = source.fetch()[0]
+
+    assert position.daily_profit_loss is None
+
+
 def test_us_listing_falls_back_to_the_english_name():
     """Toss echoes the ticker in `name` for US listings, so `name` alone
     leaves the bare ticker standing - which is what the AI analyst then

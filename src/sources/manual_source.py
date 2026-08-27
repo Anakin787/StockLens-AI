@@ -18,9 +18,15 @@ from src.sources.base import HoldingSource
 class ManualSource(HoldingSource):
     name = SOURCE_MANUAL
 
-    def __init__(self, market_api, manual_holdings):
+    def __init__(self, market_api, manual_holdings, previous_closes=None):
         self.market_api = market_api
         self.manual_holdings = list(manual_holdings or [])
+        #: ``{symbol: Decimal}`` last completed session close, injected by the
+        #: caller. Toss computes today's move for its own positions; for
+        #: manual ones there is no such field in the price feed, so the
+        #: previous close has to come from elsewhere (the dashboard passes a
+        #: cache-first yfinance lookup). Absent -> no daily P&L, as before.
+        self.previous_closes = previous_closes or {}
 
     def fetch(self):
         if not self.manual_holdings:
@@ -37,10 +43,10 @@ class ManualSource(HoldingSource):
                 positions.append(position)
         return positions
 
-    @staticmethod
-    def _to_position(holding, prices, masters):
+    def _to_position(self, holding, prices, masters):
         master = masters.get(holding.symbol) or {}
         quote = prices.get(holding.symbol) or {}
+        has_live_quote = quote.get("lastPrice") is not None
 
         currency = (
             holding.currency
@@ -74,6 +80,19 @@ class ManualSource(HoldingSource):
         profit_loss = market_value - purchase_amount
         profit_rate = profit_loss / purchase_amount if purchase_amount else None
 
+        # Today's move, vs. the last completed session close the caller
+        # supplied. Only meaningful against a live quote - comparing a static
+        # config price to a market close is not a day's return. Left as None
+        # (not 0) when unknown so the aggregator omits it rather than
+        # reporting a confident "no change".
+        daily_profit_loss = None
+        daily_profit_rate = None
+        prev_close = self.previous_closes.get(holding.symbol)
+        if has_live_quote and prev_close is not None and prev_close > 0:
+            move = last_price - prev_close
+            daily_profit_loss = holding.qty * move
+            daily_profit_rate = move / prev_close
+
         return Position(
             symbol=holding.symbol,
             name=holding.name or display_name(master, holding.symbol),
@@ -87,6 +106,8 @@ class ManualSource(HoldingSource):
             purchase_amount=purchase_amount,
             profit_loss=profit_loss,
             profit_rate=profit_rate,
+            daily_profit_loss=daily_profit_loss,
+            daily_profit_rate=daily_profit_rate,
             avg_exchange_rate=holding.avg_exchange_rate,
             security_type=master.get("securityType"),
             leverage_factor=to_decimal(master.get("leverageFactor")),

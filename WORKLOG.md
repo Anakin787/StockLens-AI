@@ -4,6 +4,71 @@
 
 ---
 
+## 2026-08-27 — 매매전략 Opus 재검토 반영 (LIVE 전 필수 6건)
+
+전략을 실거래에 붙이기 전 Opus 어드바이저로 한 번 더 검토했다. "반드시 고칠 것" 6건 중 4건 수정, 1건은 문서화로 결론, 1건은 검증 과제로 남김.
+
+### 1. 디슬로케이션 쿨다운이 라이브에서 죽어 있었다
+
+급락 시 예산 2배 매수("디슬로케이션") 후 5일 쿨다운을 거는 로직이, 라이브에서는 마지막 디슬로케이션 매수를 **한 번도 인식하지 못했다.** 라이브 스토어(`store.repo.save_decision`)는 `signal.meta`를 dict 그대로 `payload` 키에 저장하는데, `_entry_meta`는 그걸 JSON 문자열로 보고 `json.loads(dict)` → TypeError → `{}`로 떨어뜨렸다. 백테스트는 `meta` 키를 써서 이 경로를 안 탄다 — 즉 백테스트가 검증하던 코드와 라이브가 실행하던 코드가 달랐다. `payload`가 이미 dict면 그대로 반환하도록 수정.
+
+### 2. `ctx.recent` 크기가 백테스트/라이브 불일치
+
+라이브는 `store.recent_signals(limit=50)`, 백테스트는 무제한 `recent_log`를 넘겼다. 쿨다운의 "로그가 충분히 안 옛날까지 닿으면 fail-closed" 분기는 50개 창에서만 의미가 있는데, 백테스트에선 절대 안 걸렸다. 백테스트도 `recent_log[-50:]`로 맞춤.
+
+### 3. 추세 이탈 청산이 매일 중복 발행
+
+`_exit_signals`는 매 실행마다 백지에서 다시 판단한다. 하락 추세가 며칠 이어지면 매일 `position.quantity` 전량 매도를 새로 냈다. 라이브는 T+1~T+2 정산 지연 동안 포지션·매도가능수량이 그대로라, 리스크 게이트도 이 중복을 못 막는다. `exit_cooldown_days`(기본 3일) 파라미터와 `_exit_in_flight()` 가드 추가 — 최근 청산 신호가 승인된 적 있으면 재발행 억제. `ctx.recent`가 순수 전략이 읽을 수 있는 유일한 in-flight 상태다.
+
+### 4. 리밸런스 요일이 KST 벽시계 기준
+
+`ctx.now.date().weekday()`로 "월요일 리밸런스"를 판정했다. 미국장 마감은 KST 화요일 새벽 — 마감 후 배치가 돌면 이미 화요일이라 그 주 리밸런스를 **통째로 건너뛴다.** `today`를 `benchmark_history.last_date`(= 미국 세션 날짜)에 고정. 백테스트에선 `ctx.now`의 날짜와 항상 같아 무변화. `now`를 데이터 마지막 봉과 분리해 놨던 모멘텀 테스트 ~8개를 마지막 봉이 실제로 월요일에 떨어지도록 재작성.
+
+### 5. OCO 손절은 켜지 않는다 — 문서로 명시 (결론)
+
+[9]에서 만든 reconciler의 OCO 등록은 `momentum-dca` 매수에 대해 **한 번도 실행되지 않는다.** 전략이 `stop_loss_price`/`take_profit_price`를 신호에 안 싣기 때문. 손절 폭 자체가 계획서 8단계 백테스트가 정해야 할 숫자라, 검증 안 된 값(예: -15%)을 넣으면 손실을 막기보다 멀쩡한 포지션을 조기 청산할 위험이 더 크다. 지금은 켜지 않고, 현 상태를 세 곳에 분명히 적었다:
+
+- `momentum_dca.py` 모듈 docstring — "per-position 손절 없음, 추세 필터가 유일한 하방 방어, 봇이 돌 때 + 벤치마크 전체 추세가 꺾일 때만 작동" + "8단계 나오면 재검토"
+- `reconciler.py` 모듈 docstring — "'리컨실러가 OCO를 건다'를 '라이브 매수가 손절로 보호된다'로 읽지 말 것 — 현재는 아니다"
+- `_arm_bracket` early-return 주석
+
+### 6. USD 매수 여력 — 검증 과제 (미해결)
+
+`_budget`이 `ctx.buying_power["USD"]`를 읽는데, 토스 계좌가 원화만 보유하고 자동 환전이 안 되면 예산이 영원히 0 → 전략이 조용히 아무 주문도 안 낸다. 실제 잔고로 PAPER 1회 실행해 확인 필요. 로그인 정보가 있어야 해서 이번엔 못 함.
+
+**검증**: 신규 3개 포함 전체 315개 통과.
+
+### 다음
+
+- [10] 전에 실계좌로 `python trade.py` 1회 — `ctx.buying_power`에 USD가 잡히는지 확인
+- 8단계 백테스트에서 손절 폭 결정 후 OCO 재검토
+
+---
+
+## 2026-08-27 — UI: 대시보드 폭 + 수동 보유분 당일 손익
+
+### 1. Overview가 화면을 안 채움
+
+`main` 안쪽 컨테이너가 `max-w-container-max`(1600px) + `mx-auto`라서 와이드 모니터에서 양옆이 비었다. `w-full`로 교체. 내부 그리드는 원래 `xl:grid-cols-*`라 그대로 늘어난다. `docs/ui/mockup.html`도 동일하게.
+
+### 2. Today's P&L이 수동 보유분에서 항상 +0
+
+원인: 현재 포트폴리오(IONX, TSLL)는 전부 `config.yaml`의 수동 입력. 토스 `/api/v1/holdings`는 `items: []`. 토스는 자기 계좌 종목엔 `dailyProfitLoss`를 계산해 주지만, 수동 보유분은 `ManualSource`가 그 필드를 안 채웠고 채울 수도 없었다 — 토스 시세 API(`/api/v1/prices`)가 `lastPrice`만 주고 전일 종가를 안 준다.
+
+옵션 B(yfinance 전일 종가)로 해결:
+
+- `ManualSource(previous_closes={symbol: Decimal})` 주입 → 라이브 시세가 있을 때 `qty × (last − prev)`로 `daily_profit_loss`/`_rate` 산출. 없으면 `None`(0 아님, 집계에서 제외).
+- `PortfolioService(previous_close_fn=...)` 훅. 호출 실패는 전부 `except Exception`으로 삼켜서 스냅샷·대시보드가 절대 안 죽음. **대시보드에만** 연결(리포트·매매 경로는 그대로).
+- `src/dashboard/service.py`의 `_make_previous_close_fn()` — 공유 Firestore 봉 캐시(`BarCache`) 우선, 부족분만 yfinance(`staleness_days=1`). 지연 생성이라 import 시점엔 yfinance도 Firestore도 안 건드림. `_exchange_today()`는 뉴욕 날짜 기준(KST 저녁에 "오늘"이 하루 빨리 넘어가 0 되는 것 방지). 전일 종가 = 뉴욕 오늘보다 이전인 마지막 완료 봉.
+
+### 3. `BarCache.bars`가 복합 인덱스를 요구하던 문제
+
+`where(symbol ==) + where(date 범위) + order_by(date)`는 Firestore 복합 인덱스가 필요한데 `quant-81f19` 프로젝트에 없었다(서비스 계정은 인덱스 생성 권한도 없음). `symbol` 등호만 쿼리로 보내고 날짜 범위·정렬은 파이썬에서 — `store.repo`가 자기 범위 스캔을 처리하는 방식과 동일. 이제 복합 인덱스 없이 동작하고, 전략 히스토리 로더도 같이 덕을 본다.
+
+**검증**: `yfinance` 설치 후 실데이터로 확인 — IONX +497 USD(+6.3%), TSLL +53 USD(+0.7%), 당일 합계 **+759,511 KRW (+3.5%)**. 전체 320개 테스트 통과(신규 5).
+
+---
+
 ## 2026-08-27 — Phase 2 [9]: reconciler + OCO 손절
 
 체결을 아무도 안 읽는 상태였다. `python trade.py --reconcile`로 미체결 LIVE 주문의 체결을 확인하고, 매수 체결이 확인되면 OCO 손절을 등록한다. 설계 2.3이 "개인 자동매매에서 가장 중요한 기능"이라고 꼽은 부분 — 손절을 토스 서버에 위임해서 봇이 죽어도 손절이 산다.

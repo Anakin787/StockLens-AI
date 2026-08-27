@@ -47,17 +47,32 @@ class BarCache:
         self.client = client or firestore.Client()
 
     def bars(self, symbol, start=None, end=None):
-        """The cached PriceHistory for ``symbol``, filtered to ``[start, end]``."""
-        query = self.client.collection("daily_bars").where(
-            filter=FieldFilter("symbol", "==", symbol)
-        )
-        if start is not None:
-            query = query.where(filter=FieldFilter("date", ">=", str(as_date(start))))
-        if end is not None:
-            query = query.where(filter=FieldFilter("date", "<=", str(as_date(end))))
-        query = query.order_by("date")
+        """The cached PriceHistory for ``symbol``, filtered to ``[start, end]``.
 
-        return PriceHistory(symbol, tuple(_doc_to_bar(doc) for doc in query.stream()))
+        Only the ``symbol`` equality is pushed to Firestore - a single-field
+        query, which Firestore always indexes automatically. The date range
+        and the ascending order are applied here in Python. Putting the range
+        and ``order_by`` in the query instead would require a composite index
+        (``symbol``+``date``) created per deployment, real setup friction for
+        a collection this small; ``store.repo`` already filters its own range
+        scans the same way for the same reason.
+        """
+        docs = (
+            self.client.collection("daily_bars")
+            .where(filter=FieldFilter("symbol", "==", symbol))
+            .stream()
+        )
+        lo = as_date(start) if start is not None else None
+        hi = as_date(end) if end is not None else None
+
+        bars = []
+        for doc in docs:
+            parsed = _doc_to_bar(doc)
+            if (lo is None or parsed.date >= lo) and (hi is None or parsed.date <= hi):
+                bars.append(parsed)
+        bars.sort(key=lambda b: b.date)
+
+        return PriceHistory(symbol, tuple(bars))
 
     def upsert(self, symbol, bars, source, fetched_at=None):
         """Insert or replace bars for ``symbol``. Idempotent per (symbol, date)."""

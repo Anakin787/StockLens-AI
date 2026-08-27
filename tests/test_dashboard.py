@@ -121,6 +121,57 @@ def test_daily_profit_is_exposed(client):
     assert client.get("/api/overview").json()["daily_profit_krw"] == 100000.0
 
 
+def test_manual_daily_pnl_flows_from_the_previous_close_fn(firestore_client):
+    """A previous-close lookup, wired into PortfolioService, gives manual
+    holdings a today's-P&L the Toss feed never carries for them."""
+    from src.pipeline import PortfolioService
+
+    config = AppConfig(
+        toss=TossConfig(client_id="cid", client_secret="sec"),
+        notion=NotionConfig(token="secret_real", database_id="db"),
+        analyst=AnalystConfig(api_key=None),
+        manual_holdings=[
+            ManualHolding(symbol="AAPL", qty=Decimal("10"), avg_price=Decimal("155.3"),
+                          avg_exchange_rate=Decimal("1300"))
+        ],
+    )
+    stub = StubClient()
+    # AAPL live quote is 178.5 (StubClient); previous close 170 -> +8.5/share.
+    svc = PortfolioService(
+        config, client=stub, previous_close_fn=lambda symbols: {"AAPL": Decimal("170")}
+    )
+    snapshot = svc.snapshot()
+    aapl = next(p for p in snapshot.positions if p.symbol == "AAPL")
+
+    assert aapl.daily_profit_loss == Decimal("85.0")
+    # KRW daily total = Toss item 005930 (+100,000 KRW) + AAPL (85 USD * 1342.5).
+    assert snapshot.daily_profit_krw == pytest.approx(
+        Decimal("100000") + Decimal("85.0") * Decimal("1342.5")
+    )
+
+
+def test_previous_close_fn_failure_does_not_break_the_snapshot(firestore_client):
+    from src.pipeline import PortfolioService
+
+    config = AppConfig(
+        toss=TossConfig(client_id="cid", client_secret="sec"),
+        notion=NotionConfig(token="secret_real", database_id="db"),
+        analyst=AnalystConfig(api_key=None),
+        manual_holdings=[
+            ManualHolding(symbol="AAPL", qty=Decimal("10"), avg_price=Decimal("155.3"))
+        ],
+    )
+
+    def boom(symbols):
+        raise RuntimeError("yfinance unreachable")
+
+    svc = PortfolioService(config, client=StubClient(), previous_close_fn=boom)
+    snapshot = svc.snapshot()
+    aapl = next(p for p in snapshot.positions if p.symbol == "AAPL")
+
+    assert aapl.daily_profit_loss is None
+
+
 def test_warnings_are_surfaced(client):
     warnings = client.get("/api/overview").json()["warnings"]
 

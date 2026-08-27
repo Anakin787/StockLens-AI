@@ -8,7 +8,7 @@ owns one cached copy and every tab reads that.
 
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from src.pipeline import PortfolioService, apply_name_overrides
@@ -56,11 +56,66 @@ def _num(value):
     return float(value)
 
 
+def _exchange_today():
+    """Today's date on the US exchange calendar.
+
+    The manual holdings whose daily P&L this feeds are all US-listed. Using
+    the local (KST) date would roll "today" ~14h early and zero out the day's
+    move for most of the Korean evening.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("America/New_York")).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _make_previous_close_fn():
+    """A cache-first, best-effort previous-close lookup for manual holdings.
+
+    Manual holdings carry no "today's change" field in the Toss price feed,
+    so their daily P&L has to be derived against the last completed daily
+    bar. Bars come from the shared Firestore cache, topped up from yfinance
+    only when stale. The loader is built lazily on first use so importing
+    this module never pulls in yfinance or opens a second Firestore client.
+    """
+    state = {}
+
+    def previous_closes(symbols):
+        loader = state.get("loader")
+        if loader is None:
+            from src.data.cache import BarCache
+            from src.data.loader import HistoryLoader
+            from src.data.yahoo import YahooBarSource
+
+            loader = HistoryLoader(BarCache(), YahooBarSource(), staleness_days=1)
+            state["loader"] = loader
+
+        end = date.today()
+        histories = loader.load(list(symbols), end - timedelta(days=12), end)
+
+        cutoff = _exchange_today()
+        result = {}
+        for symbol, history in histories.items():
+            prev = None
+            for bar in history:  # oldest first
+                if bar.date < cutoff:
+                    prev = bar.close
+            if prev is not None and prev > 0:
+                result[symbol] = prev
+        return result
+
+    return previous_closes
+
+
 class DashboardService:
     def __init__(self, config):
         self.config = config
         self.store = Store()
-        self.portfolio = PortfolioService(config)
+        self.portfolio = PortfolioService(
+            config, previous_close_fn=_make_previous_close_fn()
+        )
         self._snapshot = _Cached(TTL_PORTFOLIO)
         self._status = _Cached(TTL_MARKET_STATUS)
         self.last_sync = None

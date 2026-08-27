@@ -14,6 +14,14 @@ partially filled, or rejected. Placing it here, one step later, is what
 keeps "did we actually get the shares" and "are they now protected" from
 being conflated into one race.
 
+A signal that names *neither* leg gets no bracket - ``_arm_bracket`` returns
+early. As of this writing the only wired-up strategy, ``momentum-dca``,
+emits no stop/take-profit on its buys by design (see its module docstring:
+the stop distance is left for step 8's backtest to set), so in practice no
+bracket is armed for any live buy yet. This code path is exercised only once
+a strategy starts populating those fields. Do not read "the reconciler arms
+OCO brackets" as "live buys are protected by a stop" - today they are not.
+
 PAPER orders are skipped entirely. A PAPER order was never sent, so there is
 nothing on the broker's side to poll; simulating a fill would mean
 inventing execution behaviour that belongs to the backtest engine, not here.
@@ -187,7 +195,11 @@ class Reconciler:
         stop_loss = to_decimal(order.get("stop_loss_price"))
         take_profit = to_decimal(order.get("take_profit_price"))
         if stop_loss is None or take_profit is None:
-            return ""  # this signal did not ask for a bracket
+            # This signal did not ask for a bracket. Every momentum-dca buy
+            # currently lands here on purpose (see module docstring) - the
+            # strategy carries no per-position stop until step 8's backtest
+            # justifies a distance. Not a warning, just the current state.
+            return ""
 
         entry_id = order["client_order_id"]
         oco_id = f"oco-{entry_id}"[:64]

@@ -134,8 +134,12 @@ class Backtester:
             )
 
             # 4-5. Context and strategy.
+            # The live path passes ``store.recent_signals(limit=50)``; match
+            # that window here so a cooldown rule that reads ``ctx.recent`` is
+            # tested against the same bounded history it sees in production,
+            # not an unbounded one that can never trip the truncation guard.
             ctx = build_backtest_context(
-                day, sim, self.history, fx_rate, universe_symbols, recent=recent_log
+                day, sim, self.history, fx_rate, universe_symbols, recent=recent_log[-50:]
             )
             signals = self.strategy.evaluate(ctx) or []
 

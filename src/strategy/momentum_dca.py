@@ -4,17 +4,27 @@ The brief this implements: a small account, ~50-100만원 arriving monthly, that
 wants to be aggressive without being reckless. "Aggressive" here means
 concentration - new cash goes to the one or two names with the strongest
 recent trend rather than being split evenly - not leverage beyond 2x and not a
-wide stop-loss grid (see :mod:`src.strategy.universe` for the leverage policy;
-per-position stop-losses are a parameter here, defaulted off, deliberately
-left for a later backtest to justify rather than assumed).
+wide stop-loss grid (see :mod:`src.strategy.universe` for the leverage policy).
 
-The one downside guard this strategy does carry is a trend filter: leveraged
-instruments (2x index funds) are only ever bought, and are sold out of
-entirely, based on whether the benchmark is above its own long moving average.
-A 1x position is never sold on a trend signal - timing the DCA's core holding
-off a single moving-average cross has a mixed record at best, and would strand
-a month's contribution in cash for no proven benefit. A 2x position's decay is
-what the trend filter exists to avoid.
+No per-position stop-loss. This strategy deliberately emits no
+``stop_loss_price``/``take_profit_price`` on its buy signals, so the OCO
+bracket that :class:`src.execution.reconciler.Reconciler` would otherwise arm
+once an entry fills is never placed for a momentum-dca buy. That is a choice,
+not an oversight: the stop *distance* is exactly the number step 8 of the
+plan is meant to justify against the backtest, and shipping an unvalidated
+one (a guessed -15%, say) risks selling a sound position early far more
+reliably than it caps a loss. Until that backtest exists, the trend filter
+below is the *only* downside guard this strategy carries - and it only acts
+while the bot is actually running and the whole benchmark has broken trend,
+not on a single name gapping down inside an intact uptrend. Reconsider this
+when step 8 lands.
+
+That trend filter: leveraged instruments (2x index funds) are only ever
+bought, and are sold out of entirely, based on whether the benchmark is above
+its own long moving average. A 1x position is never sold on a trend signal -
+timing the DCA's core holding off a single moving-average cross has a mixed
+record at best, and would strand a month's contribution in cash for no proven
+benefit. A 2x position's decay is what the trend filter exists to avoid.
 """
 
 from dataclasses import dataclass
@@ -76,6 +86,12 @@ class MomentumDcaParams:
     trend_sma: int = 200
     leverage_requires_trend: bool = True
     leverage_max_vol: Decimal = Decimal("0.35")
+    #: Days after an accepted trend-exit sell during which the same symbol is
+    #: not sold again. ``_exit_signals`` re-derives from scratch every run, so
+    #: a multi-day downtrend would otherwise re-emit yesterday's full-size
+    #: sell before it has settled (US equities settle T+1..T+2), and the
+    #: position still shows the shares as sellable in the meantime.
+    exit_cooldown_days: int = 3
 
     # --- rhythm ---
     rebalance_weekday: int = 0  # Monday
@@ -181,6 +197,7 @@ MomentumDcaParams._FIELDS = {
     "trend_sma": int,
     "leverage_requires_trend": bool,
     "leverage_max_vol": "decimal",
+    "exit_cooldown_days": int,
     "rebalance_weekday": int,
     "dislocation_enabled": bool,
     "dislocation_day_drop": "decimal",
@@ -214,6 +231,16 @@ def _entry_meta(entry):
     if isinstance(meta, dict):
         return meta
     payload = entry.get("payload")
+    if isinstance(payload, dict):
+        # The live store (``store.repo.Store.save_decision``) writes
+        # ``signal.meta`` straight through as a dict under ``payload`` -
+        # ``recent_signals()`` hands it back unchanged. Only the SQLite-era
+        # path ever JSON-encoded it to a string; the backtest uses the
+        # ``meta`` key above. Without this branch every live cooldown lookup
+        # falls through to ``json.loads(dict)`` -> TypeError -> ``{}``, so no
+        # dislocation buy is ever recognised and the fail-closed guard fires
+        # on every dip.
+        return payload
     if payload:
         import json
 
@@ -273,9 +300,18 @@ class MomentumDcaStrategy(Strategy):
 
     def evaluate(self, ctx):
         p = self.params
-        today = ctx.now.date() if hasattr(ctx.now, "date") else ctx.now
 
         benchmark_history = ctx.bars(p.benchmark)
+        # Anchor every date comparison - the weekly rebalance weekday, the
+        # dislocation cooldown, staleness - to the exchange session, not the
+        # wall clock this happens to run on. A post-close run in KST is
+        # already on the next calendar day while the US session that just
+        # closed is the one to rebalance for; keying off ``ctx.now`` there
+        # silently skips that week entirely. The benchmark's last completed
+        # bar *is* that session date, and in the backtest it equals
+        # ``ctx.now``'s date exactly, so this changes nothing there.
+        session_date = benchmark_history.last_date if benchmark_history is not None else None
+        today = session_date or (ctx.now.date() if hasattr(ctx.now, "date") else ctx.now)
         trend_up, bench_closes = self._trend(benchmark_history, today, p)
         if trend_up is None:
             # No benchmark, no trend filter, no trading - the leverage gate
@@ -326,6 +362,8 @@ class MomentumDcaStrategy(Strategy):
                 continue
             if position.quantity <= ZERO:
                 continue
+            if self._exit_in_flight(ctx, symbol, today):
+                continue
             yield Signal(
                 strategy=self.name,
                 symbol=symbol,
@@ -339,6 +377,37 @@ class MomentumDcaStrategy(Strategy):
                 ),
                 meta={"mode": "trend-exit", "benchmark": self.params.benchmark},
             )
+
+    def _exit_in_flight(self, ctx, symbol, today):
+        """True when a trend-exit sell for ``symbol`` was accepted recently
+        enough that it may not have settled yet.
+
+        ``_exit_signals`` re-derives from a clean slate every evaluation, so a
+        downtrend lasting several sessions would re-propose the same
+        full-quantity sell each day. Live settlement lag (T+1..T+2) leaves the
+        position - and therefore the risk gate's sellable check - showing
+        those shares while the prior sell is in flight, so nothing downstream
+        catches the duplicate. ``ctx.recent`` is the only in-flight signal
+        state a pure strategy is allowed to read.
+        """
+        horizon = self.params.exit_cooldown_days
+        if horizon <= 0:
+            return False
+        for entry in ctx.recent or ():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("strategy") != self.name or entry.get("symbol") != symbol:
+                continue
+            if entry.get("outcome") == "rejected":
+                continue  # that sell did not happen - a retry is wanted
+            if _entry_meta(entry).get("mode") != "trend-exit":
+                continue
+            entry_date = _entry_date(entry)
+            if entry_date is None:
+                return True  # undateable - assume it is still in flight
+            if (today - entry_date).days < horizon:
+                return True
+        return False
 
     # --------------------------------------------------------------- mode
 

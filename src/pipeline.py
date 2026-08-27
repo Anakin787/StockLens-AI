@@ -58,17 +58,41 @@ def build_client(config, allow_write=False):
 class PortfolioService:
     """One place that knows how to turn config + API into a snapshot."""
 
-    def __init__(self, config, client=None):
+    def __init__(self, config, client=None, previous_close_fn=None):
         self.config = config
         self.client = client or build_client(config)
         self.account = AccountApi(self.client, account_no=config.toss.account_no)
         self.market = MarketApi(self.client)
+        #: Optional ``(symbols) -> {symbol: Decimal}`` last-completed-session
+        #: close, used to derive today's P&L for *manual* holdings (Toss
+        #: already reports it for its own). Best-effort: any failure is
+        #: swallowed and manual daily P&L simply stays absent. Only the
+        #: dashboard wires this today.
+        self.previous_close_fn = previous_close_fn
+
+    def _manual_previous_closes(self):
+        if self.previous_close_fn is None:
+            return {}
+        symbols = [h.symbol for h in self.config.manual_holdings if h.symbol]
+        if not symbols:
+            return {}
+        try:
+            return self.previous_close_fn(symbols) or {}
+        except Exception:
+            # A price-history lookup failing must never take the snapshot
+            # (and the whole dashboard) down with it - the daily P&L for
+            # manual holdings just falls back to "unknown".
+            return {}
 
     def snapshot(self, include_warnings=True, include_buying_power=True):
         aggregator = HoldingsAggregator(
             sources=[
                 TossSource(self.account),
-                ManualSource(self.market, self.config.manual_holdings),
+                ManualSource(
+                    self.market,
+                    self.config.manual_holdings,
+                    previous_closes=self._manual_previous_closes(),
+                ),
             ],
             market_api=self.market,
         )
