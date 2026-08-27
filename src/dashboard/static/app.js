@@ -25,7 +25,7 @@ const ALLOCATION_COLORS = {
 };
 
 const state = { view: "overview", range: "3M", allocBy: "market", history: null,
-                editingName: false };
+                editingName: false, auditCategory: "" };
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -85,10 +85,12 @@ function setView(view) {
         : "text-on-surface-variant hover:bg-surface-container-high");
   });
   $("page-title").textContent = { overview: "Overview", holdings: "Holdings",
-    trading: "Trading", reports: "Reports", settings: "Settings" }[view] || view;
+    trading: "Trading", reports: "Reports", audit: "Audit Log",
+    settings: "Settings" }[view] || view;
 
   if (view === "holdings") loadHoldings();
   if (view === "reports") loadReports();
+  if (view === "audit") loadAudit().catch((err) => showError(String(err)));
   if (view === "settings") loadSettings();
 }
 
@@ -561,6 +563,107 @@ function styleRangeButtons() {
   });
 }
 
+
+/* ------------------------------------------------------------- audit log */
+
+const AUDIT_LABELS = {
+  baseline: "기준선", universe: "유니버스", strategies: "전략 목록", strategy_params: "전략 파라미터",
+  limits: "리스크 한도", veto: "AI 보류", candidate: "AI 제안",
+};
+
+// Two actors, two very different weights of claim: "human" is inferred from
+// the OS user of whichever process noticed the edit, "ai" is exact. The badge
+// colours say so at a glance rather than in a footnote nobody reads.
+const AUDIT_TONE = {
+  human: "bg-primary-container/30 text-primary border-primary/40",
+  ai: "bg-secondary-container/25 text-secondary border-secondary/40",
+};
+
+function auditChangeLine(change) {
+  const before = change.before === null || change.before === undefined ? "—" : String(change.before);
+  const after = change.after === null || change.after === undefined ? "—" : String(change.after);
+  const row = document.createElement("div");
+  row.className = "flex items-start gap-2 font-data-mono text-xs py-0.5";
+  const target = document.createElement("span");
+  target.className = "text-on-surface shrink-0";
+  target.textContent = change.target;
+  const arrow = document.createElement("span");
+  arrow.className = "text-on-surface-variant/70 break-all";
+  arrow.textContent = `${before} → ${after}`;
+  row.append(target, arrow);
+  if (change.evidence) {
+    const evidence = document.createElement("span");
+    evidence.className = "text-on-surface-variant/50 italic break-all";
+    evidence.textContent = `(근거: ${change.evidence})`;
+    row.appendChild(evidence);
+  }
+  return row;
+}
+
+async function loadAudit() {
+  const query = state.auditCategory ? `?category=${state.auditCategory}` : "";
+  const data = await getJSON(`/api/audit${query}`);
+  const host = $("audit-list");
+  host.innerHTML = "";
+  const entries = data.entries || [];
+
+  if (!entries.length) {
+    host.innerHTML = `<div class="p-8 text-center text-on-surface-variant">
+      기록된 변경이 없습니다. 설정을 바꾼 뒤 <code class="font-data-mono text-primary">python main.py</code>
+      또는 <code class="font-data-mono text-primary">python trade.py</code> 를 실행하면 감지됩니다.</div>`;
+    return;
+  }
+
+  entries.forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "p-4 hover:bg-surface-container-high transition-colors";
+
+    const head = document.createElement("div");
+    head.className = "flex items-center gap-2 flex-wrap";
+
+    const badge = document.createElement("span");
+    badge.className =
+      "px-2 py-0.5 rounded border text-label-caps font-bold tracking-wide " +
+      (AUDIT_TONE[entry.actor_kind] || AUDIT_TONE.human);
+    badge.textContent = entry.actor_kind === "ai" ? "AI" : "사람";
+
+    const category = document.createElement("span");
+    category.className = "font-semibold text-on-surface";
+    category.textContent = AUDIT_LABELS[entry.category] || entry.category;
+
+    const when = document.createElement("span");
+    when.className = "font-data-mono text-xs text-on-surface-variant/60 ml-auto";
+    when.textContent = (entry.detected_at || "").replace("T", " ").slice(0, 19);
+
+    head.append(badge, category, when);
+
+    const who = document.createElement("p");
+    who.className = "text-xs text-on-surface-variant/60 mt-1";
+    who.textContent = `${entry.actor || "—"} · ${entry.source || "—"}`;
+
+    const summary = document.createElement("p");
+    summary.className = "text-sm text-on-surface-variant mt-1";
+    summary.textContent = entry.summary || "";
+
+    const changes = document.createElement("div");
+    changes.className = "mt-2 border-l-2 border-outline-variant/40 pl-3";
+    (entry.changes || []).forEach((change) => changes.appendChild(auditChangeLine(change)));
+
+    item.append(head, who, summary, changes);
+    host.appendChild(item);
+  });
+}
+
+function styleAuditTabs() {
+  document.querySelectorAll(".audit-tab").forEach((tab) => {
+    const active = (tab.dataset.category || "") === state.auditCategory;
+    tab.className = "audit-tab px-3 py-1.5 rounded text-xs font-semibold transition-colors border " +
+      (active
+        ? "border-primary text-primary bg-surface-container-high"
+        : "border-outline-variant/40 text-on-surface-variant hover:text-on-surface");
+  });
+}
+
 function styleAllocTabs() {
   document.querySelectorAll(".alloc-tab").forEach((tab) => {
     const active = tab.dataset.by === state.allocBy;
@@ -588,6 +691,13 @@ function init() {
     });
   });
   $("alert-bell").addEventListener("click", () => setView("overview"));
+  document.querySelectorAll(".audit-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      state.auditCategory = tab.dataset.category || "";
+      styleAuditTabs();
+      loadAudit().catch((err) => showError(String(err)));
+    });
+  });
 
   const glossary = $("glossary-overlay");
   const closeGlossary = () => { glossary.hidden = true; };
@@ -603,6 +713,7 @@ function init() {
 
   styleRangeButtons();
   styleAllocTabs();
+  styleAuditTabs();
   setView(location.hash.slice(1) || "overview");
 
   const refresh = () => {

@@ -21,6 +21,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from src.config import load_config
+from src.audit import record_config_changes
 from src.data.cache import BarCache
 from src.data.loader import HistoryLoader
 from src.data.yahoo import YahooBarSource
@@ -31,7 +32,7 @@ from src.execution.risk import RiskGate
 from src.pipeline import PortfolioService
 from src.store.repo import Store
 from src.strategy.loader import load_strategies
-from src.strategy.universe import Universe
+from src.strategy.universe import Universe, parse_universe
 from src.toss.errors import TossError
 from src.toss.trading import TradingMode, build_trading_api
 
@@ -156,6 +157,16 @@ def run(argv=None):
     print(f">>> 전략 {len(strategies)}개: {', '.join(s.name for s in strategies)}")
 
     store = Store()
+    # Same fingerprint source as the report pipeline (config, not the loaded
+    # strategy objects), so whichever process runs first records the change
+    # and the other sees nothing left to record. Skipped in --dry-run, which
+    # promises to write nothing.
+    if not args.dry_run:
+        for entry in record_config_changes(
+            store, config.trading, parse_universe(config.trading.universe)
+        ):
+            print(f">>> 설정 변경 감지: [{entry['category']}] {entry['summary']}")
+
     service = PortfolioService(config)
     try:
         universe_symbols = _strategy_symbols(strategies)

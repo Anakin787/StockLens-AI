@@ -82,3 +82,37 @@ def test_an_empty_review_writes_nothing(store):
 
     assert store.active_vetoes() == {}
     assert store.latest_universe_candidates() == []
+
+
+# ------------------------------------------------------------- audit log
+
+
+def test_audit_entries_come_back_newest_first(store):
+    store.save_audit_entries(
+        [
+            {"detected_at": "2026-08-26T09:00:00", "category": "universe", "summary": "old"},
+            {"detected_at": "2026-08-27T09:00:00", "category": "limits", "summary": "new"},
+        ]
+    )
+
+    assert [e["summary"] for e in store.recent_audit()] == ["new", "old"]
+
+
+def test_audit_entries_can_be_filtered_by_category(store):
+    store.save_audit_entries(
+        [
+            {"detected_at": "2026-08-26T09:00:00", "category": "universe", "summary": "u"},
+            {"detected_at": "2026-08-27T09:00:00", "category": "veto", "summary": "v"},
+        ]
+    )
+
+    assert [e["summary"] for e in store.recent_audit(category="veto")] == ["v"]
+
+
+def test_the_fingerprint_is_absent_until_something_records_one(store):
+    # None, not {} - "never recorded" and "recorded as empty" are different
+    # facts, and only the first one may be silent.
+    assert store.audit_fingerprint() is None
+
+    store.save_audit_fingerprint({"universe": {"AAPL": {"max_weight": "0.35"}}})
+    assert store.audit_fingerprint()["universe"]["AAPL"]["max_weight"] == "0.35"

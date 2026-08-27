@@ -323,3 +323,40 @@ def test_overrides_survive_a_new_service_on_the_same_db(service, firestore_clien
     from src.store.repo import Store
 
     assert Store(firestore_client).symbol_names()["005930"] == "삼성전자 (메인)"
+
+
+def test_audit_endpoint_returns_entries_newest_first(client, service):
+    service.store.save_audit_entries(
+        [
+            {"detected_at": "2026-08-26T09:00:00", "category": "universe",
+             "actor_kind": "human", "actor": "jiun@box", "summary": "추가 1종목 (MSFT)",
+             "changes": [{"target": "MSFT", "before": None, "after": "추가"}]},
+            {"detected_at": "2026-08-27T09:00:00", "category": "veto",
+             "actor_kind": "ai", "actor": "AI universe review", "summary": "보류: INTC",
+             "changes": [{"target": "INTC", "before": None, "after": "[trading_halt] 정지"}]},
+        ]
+    )
+
+    entries = client.get("/api/audit").json()["entries"]
+
+    assert [e["category"] for e in entries] == ["veto", "universe"]
+    assert entries[0]["actor_kind"] == "ai"
+
+
+def test_audit_endpoint_filters_by_category(client, service):
+    service.store.save_audit_entries(
+        [
+            {"detected_at": "2026-08-26T09:00:00", "category": "universe", "summary": "u"},
+            {"detected_at": "2026-08-27T09:00:00", "category": "limits", "summary": "l"},
+        ]
+    )
+
+    entries = client.get("/api/audit?category=limits").json()["entries"]
+
+    assert [e["summary"] for e in entries] == ["l"]
+
+
+def test_audit_endpoint_rejects_an_unknown_category(client):
+    # The pattern is the allow-list; an arbitrary category would silently
+    # return an empty list and read as "nothing ever happened".
+    assert client.get("/api/audit?category=whatever").status_code == 422

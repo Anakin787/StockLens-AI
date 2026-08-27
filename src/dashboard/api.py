@@ -77,6 +77,14 @@ def reports(limit: int = Query(20, ge=1, le=100)):
     return get_service().reports(limit)
 
 
+@app.get("/api/audit")
+def audit(
+    limit: int = Query(50, ge=1, le=200),
+    category: str | None = Query(None, pattern="^(baseline|universe|strategies|strategy_params|limits|veto|candidate)$"),
+):
+    return get_service().audit(limit=limit, category=category)
+
+
 @app.get("/api/health")
 def health():
     return get_service().health()

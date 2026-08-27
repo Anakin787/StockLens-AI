@@ -171,6 +171,66 @@ class Store:
         )
         return [{"page_id": doc.id, **doc.to_dict()} for doc in query.stream()]
 
+    # ------------------------------------------------------------ audit log
+
+    def save_audit_entries(self, entries):
+        """Append audit entries. Append-only by design - nothing here updates.
+
+        An audit log whose rows can be edited in place answers a different,
+        much weaker question than the one it was built for.
+        """
+        collection = self.client.collection("audit_log")
+        written = 0
+        for entry in entries or []:
+            collection.add(_json_safe(dict(entry)))
+            written += 1
+        return written
+
+    #: How many ordered rows a filtered audit read scans before giving up.
+    _AUDIT_SCAN = 500
+
+    def recent_audit(self, limit=50, category=None):
+        """Audit entries, newest first, optionally one category only.
+
+        Only the ordering is pushed to Firestore; the category is matched
+        here. Combining ``where`` with an ``order_by`` on a different field
+        needs a composite index created per deployment - and the emulator
+        accepts such a query happily, so the failure would first appear in
+        production. Every other range scan in this module filters in Python
+        for the same reason.
+        """
+        query = self.client.collection("audit_log").order_by(
+            "detected_at", direction=firestore.Query.DESCENDING
+        )
+        scan = limit if not category else max(limit, self._AUDIT_SCAN)
+        rows = []
+        for doc in query.limit(scan).stream():
+            data = doc.to_dict() or {}
+            if category and data.get("category") != category:
+                continue
+            rows.append({"id": doc.id, **data})
+            if len(rows) >= limit:
+                break
+        return rows
+
+    def audit_fingerprint(self):
+        """The audited settings as of the last run, or None on a first run.
+
+        None and ``{}`` mean different things here - "never recorded" versus
+        "recorded, and everything was empty" - so the absent document returns
+        None and the diff treats it as a silent baseline rather than as 39
+        symbols being added at once.
+        """
+        doc = self.client.collection("audit_state").document("fingerprint").get()
+        if not doc.exists:
+            return None
+        return (doc.to_dict() or {}).get("settings")
+
+    def save_audit_fingerprint(self, settings, ts=None):
+        self.client.collection("audit_state").document("fingerprint").set(
+            {"settings": _json_safe(settings), "ts": ts or _now(precise=True)}
+        )
+
     # ------------------------------------------------- universe review (AI)
 
     def save_universe_review(self, review, ttl_days=7, ts=None):

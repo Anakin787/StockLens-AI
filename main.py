@@ -15,6 +15,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from src.analyst import Analyst
+from src.audit import record_config_changes, review_entries
 from src.config import load_config
 from src.news import NewsFetcher, portfolio_keywords
 from src.notion import NotionReporter
@@ -46,6 +47,7 @@ def _review_universe(config, snapshot, news_data, store):
 
     if review.vetoes or review.candidates:
         store.save_universe_review(review, ttl_days=config.analyst.veto_ttl_days)
+        store.save_audit_entries(review_entries(review))
     for veto in review.vetoes:
         print(f"    보류: {veto.symbol} [{veto.category}] {veto.reason}")
     if review.candidates:
@@ -92,6 +94,14 @@ def run():
     # 2. Persist before anything that can fail on a third-party service. The
     #    Portfolio Value chart cannot be backfilled, so the snapshot is worth
     #    keeping even if Notion or Gemini is down.
+    # 2b. Audit: did anyone change the universe, the strategy or its limits
+    #     since the last run? Detected, not declared - nobody has to remember
+    #     to write it down.
+    for entry in record_config_changes(
+        store, config.trading, parse_universe(config.trading.universe)
+    ):
+        print(f">>> 설정 변경 감지: [{entry['category']}] {entry['summary']}")
+
     ts = store.save_snapshot(snapshot)
     print(f">>> Snapshot saved ({ts}, total {store.snapshot_count()} rows)")
 

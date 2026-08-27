@@ -236,6 +236,15 @@ class DashboardService:
     def reports(self, limit=20):
         return {"reports": self.store.recent_reports(limit)}
 
+    def audit(self, limit=50, category=None):
+        """The change log: settings edits and what the AI review did.
+
+        Read straight through - no snapshot, no upstream call - so this page
+        still answers "what changed" on a day the brokerage API is down,
+        which is exactly a day someone might be asking.
+        """
+        return {"entries": self.store.recent_audit(limit=limit, category=category)}
+
     def health(self):
         snapshot, error = self.snapshot()
         return {
