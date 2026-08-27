@@ -1,4 +1,4 @@
-"""Firestore emulator wiring, shared by every test that touches Store/BarCache.
+"""Firestore emulator wiring, shared by every test that touches Store.
 
 Requires ``firebase-tools`` (``npm install -g firebase-tools``) and a JRE on
 PATH. Tests that need Firestore are skipped, not failed, when the emulator

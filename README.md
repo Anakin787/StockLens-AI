@@ -76,7 +76,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json  # Firesto
 
 ### Firebase (Firestore) 설정
 
-스냅샷·시그널·주문·일봉 캐시 등 모든 영속 데이터는 Firestore에 저장됩니다.
+스냅샷·시그널·주문 등 영속 데이터는 Firestore에 저장됩니다. **일봉 캐시만 예외**로 로컬 SQLite(`bars.db`)에 둡니다 — 16년치 OHLC는 불변 참조 데이터고 다른 기기가 읽지 않는데, 유니버스 한 번 적재에 5만 건 쓰기라 Firestore 무료 티어 하루 할당량을 통째로 먹습니다. 경로는 `M7_BAR_CACHE_PATH`로 바꿀 수 있습니다.
 
 1. https://console.firebase.google.com 에서 프로젝트 생성 (또는 기존 GCP 프로젝트 사용)
 2. **Firestore Database** 활성화 (Native mode)
@@ -292,6 +292,7 @@ M7-Terminal/
     ├── strategy/            # base.py(Signal · Strategy) · loader.py
     ├── execution/           # risk.py(리스크 게이트) · executor.py · reconciler.py(체결·OCO) · context.py · ids.py
     ├── store/               # Firestore (스냅샷 · 포지션 · 리포트 · 신호 · 주문)
+    ├── data/                # 일봉 캐시 (로컬 SQLite) + yfinance 소스
     ├── dashboard/           # FastAPI + 정적 프론트엔드
     ├── news.py              # Google News RSS
     ├── analyst.py           # Gemini 분석

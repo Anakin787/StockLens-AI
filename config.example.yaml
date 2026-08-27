@@ -10,9 +10,12 @@
 #   GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json
 #
 # From Phase 2 the Toss credential carries order-placement rights, so the
-# environment is the only place it should live. All persistence (snapshots,
-# signals, orders, the daily-bar cache) lives in Firestore, reached through
-# the service account above - there is no db_path setting here anymore.
+# environment is the only place it should live. Live persistence (snapshots,
+# signals, orders) lives in Firestore, reached through the service account
+# above - there is no db_path setting here anymore. The daily-bar cache is the
+# one exception: it is a local SQLite file (bars.db), because 16 years of OHLC
+# is immutable reference data nothing else reads. Override its location with
+# M7_BAR_CACHE_PATH.
 
 toss:
   # Optional. Omit to use the first account returned by /api/v1/accounts.
