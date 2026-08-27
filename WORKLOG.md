@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-27 — 종목 뉴스 검색을 상품명 대신 기초자산으로
+
+레버리지/단일종목 ETF의 정식 상품명("DIREXION DAILY TSLA BULL 2X SHARES")으로 뉴스를 검색하면 ETF 발행사 보도자료 위주로 걸리고 정작 그 종목에 영향을 주는 기사는 잘 안 잡혔다.
+
+`ManualHolding.underlying`(config.yaml `portfolio.manual[].underlying`) 추가 — TSLL은 "TSLA", IONX는 "IONQ"처럼 실제로 추종하는 기초자산을 명시. `Position.underlying`으로 흘러가고, `portfolio_keywords()`가 있으면 이걸, 없으면 기존처럼 표시 이름을 키워드로 쓴다. 상품명에서 기초자산을 문자열 파싱으로 추측하지 않고 config에 명시하도록 한 건 — universe.py가 레버리지 상품의 `underlying`을 이미 같은 방식(명시, 추측 금지)으로 다루는 것과 일관되게.
+
+**검증**: 키워드가 "DEFIANCE DAILY TARGET 2X LONG IONQ ETF" → "IONQ", "DIREXION DAILY TSLA BULL 2X SHARES" → "TSLA"로 바뀌었고, 실제로 IonQ 개별 기사(우주궤도 광통신 단말기, 이사진 확충)와 테슬라 개별 기사(중국 리콜, 사이버트럭 가격 인상)가 잡혔다 — 이전엔 ETF 발행사 뉴스만 나왔다. 신규 테스트 6개 포함 전체 342개 통과.
+
+---
+
 ## 2026-08-27 — AI Analyst: 종목별 뉴스 반영 + 외부 안전자산(적금) 고려
 
 ### 1. AI 프롬프트가 종목별 뉴스를 안 읽고 있었다

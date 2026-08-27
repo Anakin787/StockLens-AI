@@ -4,20 +4,27 @@ from datetime import datetime
 
 
 def portfolio_keywords(snapshot):
-    """Distinct display names of currently held positions, in holding order.
+    """Distinct news-search keywords for currently held positions, in order.
 
     Feeds the report's news search with the account's actual stocks, not
     just the static macro keywords in config - "news about what I hold", not
-    only "news about the economy in general". A company's display name (from
-    Toss, or the name given in config.yaml for a manual holding) is used
-    rather than the ticker: matched against Google News, a name like
-    "삼성전자" surfaces far more than the bare symbol "005930" would.
+    only "news about the economy in general".
+
+    A position's ``underlying`` wins when set (a leveraged or single-stock
+    product declares the one company it actually tracks -
+    config.yaml's ``portfolio.manual[].underlying`` - e.g. TSLL -> "TSLA");
+    searching a fund's full listed name ("DIREXION DAILY TSLA BULL 2X
+    SHARES") returns almost nothing on a general news search, where the
+    underlying company's own name does. Otherwise the display name is used
+    rather than the ticker: "삼성전자" surfaces far more on Google News than
+    the bare symbol "005930" would.
     """
     seen = []
     for position in getattr(snapshot, "positions", None) or []:
-        name = (getattr(position, "name", None) or "").strip()
-        if name and name not in seen:
-            seen.append(name)
+        keyword = getattr(position, "underlying", None) or getattr(position, "name", None) or ""
+        keyword = keyword.strip()
+        if keyword and keyword not in seen:
+            seen.append(keyword)
     return seen
 
 

@@ -90,6 +90,12 @@ class Position:
     security_type: str | None = None
     leverage_factor: Decimal | None = None
 
+    #: The single company this product actually tracks (TSLL -> "TSLA"),
+    #: only ever set from config.yaml's portfolio.manual[].underlying today.
+    #: Feeds the report's per-holding news search, which a leveraged product's
+    #: own listed name searches poorly - see ManualHolding.underlying.
+    underlying: str | None = None
+
     @property
     def is_foreign(self):
         return self.currency != "KRW"

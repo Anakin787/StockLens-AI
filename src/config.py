@@ -83,6 +83,13 @@ class ManualHolding:
     currency: str | None = None
     price: Decimal | None = None
     avg_exchange_rate: Decimal | None = None
+    #: The single company this product actually tracks, for a leveraged or
+    #: single-stock ETF (TSLL -> "TSLA", IONX -> "IONQ"). Declared here, not
+    #: guessed from the product's name - a search for the full listed name
+    #: ("DIREXION DAILY TSLA BULL 2X SHARES") returns almost nothing useful
+    #: on a general news search, where the underlying company's own name
+    #: does. None for anything that isn't tracking a single other security.
+    underlying: str | None = None
 
     @property
     def is_static(self):
@@ -299,6 +306,7 @@ def _parse_manual_holdings(raw_portfolio):
                     entry.get("avg_exchange_rate"),
                     f"portfolio[{index}].avg_exchange_rate",
                 ),
+                underlying=entry.get("underlying"),
             )
         )
     return holdings

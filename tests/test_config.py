@@ -150,6 +150,35 @@ def test_static_asset_with_price_is_accepted(tmp_path):
     assert holding.price == Decimal("5400000")
 
 
+def test_manual_holding_underlying_defaults_to_none(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        portfolio:
+          manual:
+            - symbol: "AAPL"
+              qty: 5
+              avg_price: 180.0
+        """,
+    )
+    assert load_config(path, load_env=False).manual_holdings[0].underlying is None
+
+
+def test_manual_holding_underlying_is_read_when_given(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        portfolio:
+          manual:
+            - symbol: "TSLL"
+              qty: 100
+              avg_price: 13.0
+              underlying: "TSLA"
+        """,
+    )
+    assert load_config(path, load_env=False).manual_holdings[0].underlying == "TSLA"
+
+
 def test_savings_plans_parse_with_decimal_amounts(tmp_path):
     path = write_config(
         tmp_path,

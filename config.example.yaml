@@ -38,6 +38,15 @@ portfolio:
       avg_price: 180.0
       avg_exchange_rate: 1300.0
 
+    # A leveraged or single-stock fund. `underlying` names the one company
+    # it actually tracks, used only for the report's news search - a search
+    # for the fund's own listed name ("DIREXION DAILY TSLA BULL 2X SHARES")
+    # returns almost nothing useful; "TSLA" does.
+    # - symbol: "TSLL"
+    #   qty: 100
+    #   avg_price: 13.0
+    #   underlying: "TSLA"
+
     # An asset Toss does not list at all. No symbol, so supply price yourself.
     # - name: "금 현물"
     #   qty: 1

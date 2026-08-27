@@ -111,4 +111,5 @@ class ManualSource(HoldingSource):
             avg_exchange_rate=holding.avg_exchange_rate,
             security_type=master.get("securityType"),
             leverage_factor=to_decimal(master.get("leverageFactor")),
+            underlying=holding.underlying,
         )

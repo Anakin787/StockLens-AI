@@ -7,7 +7,7 @@ from src.models import SOURCE_TOSS, PortfolioSnapshot, Position
 from src.news import NewsFetcher, portfolio_keywords
 
 
-def position(symbol, name):
+def position(symbol, name, underlying=None):
     return Position(
         symbol=symbol,
         name=name,
@@ -17,6 +17,7 @@ def position(symbol, name):
         last_price=Decimal("1"),
         avg_purchase_price=Decimal("1"),
         source=SOURCE_TOSS,
+        underlying=underlying,
     )
 
 
@@ -34,6 +35,20 @@ def test_portfolio_keywords_dedupes_and_skips_blank_names():
 
 def test_portfolio_keywords_on_an_empty_portfolio():
     assert portfolio_keywords(PortfolioSnapshot(positions=[])) == []
+
+
+def test_portfolio_keywords_prefers_the_declared_underlying():
+    # A leveraged/single-stock product's own listed name searches poorly;
+    # the underlying company's name is what a general news search wants.
+    snapshot = PortfolioSnapshot(
+        positions=[position("TSLL", "Direxion Daily TSLA Bull 2X Shares", underlying="TSLA")]
+    )
+    assert portfolio_keywords(snapshot) == ["TSLA"]
+
+
+def test_portfolio_keywords_falls_back_to_name_without_an_underlying():
+    snapshot = PortfolioSnapshot(positions=[position("005930", "삼성전자")])
+    assert portfolio_keywords(snapshot) == ["삼성전자"]
 
 
 class FakeEntry:

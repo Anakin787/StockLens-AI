@@ -289,6 +289,27 @@ def test_manual_daily_pnl_needs_a_live_quote_not_a_static_price():
     assert position.daily_profit_loss is None
 
 
+def test_manual_position_carries_the_declared_underlying():
+    from src.config import ManualHolding
+    from src.sources.manual_source import ManualSource
+
+    source = ManualSource(
+        FakeMarketApi(
+            prices={"TSLL": {"symbol": "TSLL", "lastPrice": "9.0", "currency": "USD"}},
+            stocks={"TSLL": {"symbol": "TSLL", "name": "Direxion Daily TSLA Bull 2X Shares",
+                              "marketCountry": "US"}},
+        ),
+        [ManualHolding(symbol="TSLL", qty=Decimal("1"), avg_price=Decimal("10"),
+                       underlying="TSLA")],
+    )
+    assert source.fetch()[0].underlying == "TSLA"
+
+
+def test_manual_position_underlying_defaults_to_none():
+    position = _manual_source().fetch()[0]
+    assert position.underlying is None
+
+
 def test_us_listing_falls_back_to_the_english_name():
     """Toss echoes the ticker in `name` for US listings, so `name` alone
     leaves the bare ticker standing - which is what the AI analyst then
