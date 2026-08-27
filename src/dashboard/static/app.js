@@ -84,9 +84,12 @@ function setView(view) {
         ? "text-primary font-bold border-r-2 border-primary bg-surface-container-high"
         : "text-on-surface-variant hover:bg-surface-container-high");
   });
-  $("page-title").textContent = { overview: "Overview", holdings: "Holdings",
-    trading: "Trading", reports: "Reports", audit: "Audit Log",
-    settings: "Settings" }[view] || view;
+  // Read the title off the nav item rather than keeping a second copy here.
+  // Two lists of the same names drift, and the header showing "audit" while
+  // the nav and the section heading both said "Audit Log" is what that drift
+  // looks like.
+  const navItem = document.querySelector(`.nav-item[data-view="${view}"]`);
+  $("page-title").textContent = (navItem && navItem.dataset.title) || view;
 
   if (view === "holdings") loadHoldings();
   if (view === "reports") loadReports();
