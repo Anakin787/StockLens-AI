@@ -11,6 +11,7 @@ data lives.
 from datetime import date
 
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 #: Firestore caps a single batch at 500 writes.
 _BATCH_SIZE = 500
@@ -47,11 +48,13 @@ class BarCache:
 
     def bars(self, symbol, start=None, end=None):
         """The cached PriceHistory for ``symbol``, filtered to ``[start, end]``."""
-        query = self.client.collection("daily_bars").where("symbol", "==", symbol)
+        query = self.client.collection("daily_bars").where(
+            filter=FieldFilter("symbol", "==", symbol)
+        )
         if start is not None:
-            query = query.where("date", ">=", str(as_date(start)))
+            query = query.where(filter=FieldFilter("date", ">=", str(as_date(start))))
         if end is not None:
-            query = query.where("date", "<=", str(as_date(end)))
+            query = query.where(filter=FieldFilter("date", "<=", str(as_date(end))))
         query = query.order_by("date")
 
         return PriceHistory(symbol, tuple(_doc_to_bar(doc) for doc in query.stream()))

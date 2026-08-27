@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from src.models import to_decimal
 from src.strategy.base import DailyUsage
@@ -107,7 +108,7 @@ class Store:
         query = self.client.collection("snapshots")
         if days is not None:
             since = (datetime.now() - timedelta(days=days)).replace(microsecond=0)
-            query = query.where("ts", ">=", since.isoformat())
+            query = query.where(filter=FieldFilter("ts", ">=", since.isoformat()))
         query = query.order_by("ts")
 
         return [
@@ -246,8 +247,8 @@ class Store:
         )
         query = (
             self.client.collection("orders")
-            .where("ts", ">=", day)
-            .where("ts", "<", next_day)
+            .where(filter=FieldFilter("ts", ">=", day))
+            .where(filter=FieldFilter("ts", "<", next_day))
         )
 
         count = 0
