@@ -14,6 +14,7 @@ depend on the executor's mode check being correct - it is enforced one layer
 below, where the HTTP call is actually made.
 """
 
+from decimal import Decimal
 from enum import Enum
 
 from src.toss.errors import TossConfigError
@@ -68,6 +69,73 @@ def order_body(intent):
     return body
 
 
+def _round_to_tick(price, currency):
+    """Round a price to the precision Toss displays for its currency.
+
+    Korean equities actually trade on a multi-band tick size (1 won up to
+    2,000 won, rising in steps to 1,000 won above 500,000) that depends on
+    the price level - a rule this project has no confirmed source for, so it
+    is deliberately not applied here. Rounding to a whole won for KRW and two
+    decimals for USD matches how the rest of the codebase displays these
+    currencies; it narrows obviously-wrong prices (many decimal places from
+    a slippage multiplication) without pretending to know the real tick
+    table. A price that still lands off-tick comes back as
+    ``invalid-tick-size`` - a known, named gap, not a silent one.
+    """
+    if currency == "KRW":
+        return price.quantize(Decimal("1"))
+    return price.quantize(Decimal("0.01"))
+
+
+def conditional_order_body(
+    client_order_id,
+    symbol,
+    quantity,
+    take_profit_price,
+    stop_loss_price,
+    expire_date,
+    currency="KRW",
+    stop_loss_slippage=Decimal("0.005"),
+):
+    """Build an OCO bracket protecting a long position.
+
+    Two SELL legs: one at ``take_profit_price``, one at ``stop_loss_price``.
+    Filling either cancels the other - the mechanism design 2.3 calls "the
+    single most important feature for individual automated trading", because
+    Toss's own server watches the trigger rather than this process staying
+    alive to poll for it.
+
+    The stop leg's order price is set slightly below its trigger, the same
+    gap the design's own example uses (trigger 295 / order 294.5) - without
+    it, a fast-moving trigger can pass the order price before the limit order
+    reaches the book, and the stop simply never fills.
+    """
+    stop_order_price = _round_to_tick(
+        stop_loss_price * (Decimal("1") - stop_loss_slippage), currency
+    )
+    take_profit_price = _round_to_tick(take_profit_price, currency)
+    stop_loss_price = _round_to_tick(stop_loss_price, currency)
+
+    return {
+        "symbol": symbol,
+        "type": "OCO",
+        "quantity": str(quantity),
+        "orderType": "LIMIT",
+        "clientOrderId": client_order_id,
+        "expireDate": expire_date,
+        "first": {
+            "orderSide": "SELL",
+            "triggerPrice": str(take_profit_price),
+            "orderPrice": str(take_profit_price),
+        },
+        "second": {
+            "orderSide": "SELL",
+            "triggerPrice": str(stop_loss_price),
+            "orderPrice": str(stop_order_price),
+        },
+    }
+
+
 class TradingApi:
     def __init__(self, client, account_seq, mode=TradingMode.PAPER):
         self.client = client
@@ -110,6 +178,37 @@ class TradingApi:
         return self.client.get(
             f"/api/v1/orders/{order_id}",
             group="ORDER_INFO",
+            account_seq=self.account_seq,
+        )
+
+    def list_orders(self, params=None):
+        """GET /api/v1/orders - ORDER_HISTORY (5 TPS).
+
+        Design section 3.1 names this as the reconciler's polling source
+        ("Reconciler <- GET /orders (폴링)"). The exact query parameters and
+        response shape are not pinned down anywhere this project has a
+        confirmed source for, so the reconciler that calls this parses the
+        result defensively - by scanning for a matching clientOrderId rather
+        than assuming a specific field layout - the same caution the market
+        calendar and price-limit readers already apply to uncertain shapes.
+
+        A read, so - like get_order - it works on a PAPER session's
+        read-only client.
+        """
+        return self.client.get(
+            "/api/v1/orders",
+            group="ORDER_HISTORY",
+            params=params,
+            account_seq=self.account_seq,
+        )
+
+    def place_conditional_order(self, body):
+        """POST /api/v1/conditional-orders - CONDITIONAL_ORDER (5 TPS)."""
+        return self.client.request(
+            "POST",
+            "/api/v1/conditional-orders",
+            group="CONDITIONAL_ORDER",
+            json_body=body,
             account_seq=self.account_seq,
         )
 

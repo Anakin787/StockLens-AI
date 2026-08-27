@@ -4,9 +4,10 @@ Separate from main.py because the two batches fail differently: a report that
 does not run costs a chart point, and a trading run that does not run costs a
 trade - or, worse, runs twice. They also want different schedules.
 
-    python trade.py             # PAPER - reads the market, sends nothing
-    python trade.py --dry-run   # risk gate only, nothing written
-    python trade.py --live      # refused until the reconciler exists
+    python trade.py               # PAPER - reads the market, sends nothing
+    python trade.py --dry-run     # risk gate only, nothing written
+    python trade.py --reconcile   # poll open LIVE orders, record fills, arm OCO brackets
+    python trade.py --live        # refused until step [10] opens it
 """
 
 import argparse
@@ -25,6 +26,7 @@ from src.data.loader import HistoryLoader
 from src.data.yahoo import YahooBarSource
 from src.execution.context import build_context
 from src.execution.executor import OrderExecutor
+from src.execution.reconciler import Reconciler
 from src.execution.risk import RiskGate
 from src.pipeline import PortfolioService
 from src.store.repo import Store
@@ -90,12 +92,17 @@ def parse_args(argv=None):
     parser.add_argument(
         "--live",
         action="store_true",
-        help="실계좌 주문. 현재 단계에서는 거부됩니다 (reconciler 미구현).",
+        help="실계좌 주문. 현재 단계에서는 거부됩니다 (설계 [10]에서 별도로 엽니다).",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="리스크 게이트까지만 실행하고 DB에 아무것도 쓰지 않습니다.",
+    )
+    parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="새 신호를 평가하지 않고, 미체결 LIVE 주문의 체결을 확인하고 OCO를 등록합니다.",
     )
     return parser.parse_args(argv)
 
@@ -118,19 +125,23 @@ def run(argv=None):
     args = parse_args(argv)
 
     if args.live:
-        # Refused rather than merely discouraged. Without the reconciler
-        # ([9]) there is no way to find out what a submitted order actually
-        # did, and an unreconciled live order is an unbounded position.
+        # Refused rather than merely discouraged. Step [10] is where LIVE
+        # opens, gated on its own separate validation (minimum 1-share real
+        # trade) - the reconciler and OCO bracket existing is necessary but
+        # not sufficient for that step to be considered done.
         print(
             "ERROR: --live는 아직 열려 있지 않습니다.\n"
-            "       reconciler([9])와 OCO 손절이 붙기 전에는 체결 상태를 맞출 방법이 "
-            "없어\n       실주문을 내면 포지션을 추적할 수 없습니다. 설계 6절 [10] 참조.",
+            "       설계 6절 [10]에서 최소 수량 1주로 별도 검증한 뒤 엽니다.",
             file=sys.stderr,
         )
         return EXIT_LIVE_BLOCKED
 
-    mode = TradingMode.PAPER
     config = load_config()
+
+    if args.reconcile:
+        return _reconcile(config)
+
+    mode = TradingMode.PAPER
 
     if not config.trading.enabled:
         print("매매가 비활성화되어 있습니다. config.yaml의 trading.enabled를 켜세요.")
@@ -218,6 +229,27 @@ def run(argv=None):
     finally:
         service.close()
 
+    return EXIT_OK
+
+
+def _reconcile(config):
+    store = Store()
+    trading = build_trading_api(config, mode=TradingMode.LIVE)
+    reconciler = Reconciler(
+        trading,
+        store,
+        oco_expire_days=config.trading.oco_expire_days,
+        oco_stop_loss_slippage=config.trading.oco_stop_loss_slippage,
+    )
+
+    print(">>> 미체결 LIVE 주문 조회 중...")
+    results = reconciler.run()
+    if not results:
+        print(">>> 조회할 미체결 주문이 없습니다.")
+        return EXIT_OK
+
+    for line in results:
+        print(f"    {line}")
     return EXIT_OK
 
 

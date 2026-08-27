@@ -165,6 +165,14 @@ class TradingConfig:
     #: business, the same way its module path is.
     strategy_params: dict = field(default_factory=dict)
 
+    #: How far out an OCO bracket's expireDate is set, once an entry fills.
+    #: Toss requires an expiry (design 2.3); this is not a trading decision,
+    #: just how long the exit order is allowed to keep watching.
+    oco_expire_days: int = 30
+    #: The stop leg's order price sits this fraction below its trigger, so a
+    #: fast-moving break does not pass the limit before it reaches the book.
+    oco_stop_loss_slippage: Decimal = Decimal("0.005")
+
     def risk_limits(self):
         """Build a RiskLimits from the config, keeping every default."""
         from src.execution.risk import RiskLimits
@@ -354,6 +362,14 @@ def _parse_trading(raw_trading):
 
         parse_universe(universe_rows)
 
+    oco_expire_days = raw_trading.get("oco_expire_days", 30)
+    try:
+        oco_expire_days = int(oco_expire_days)
+    except (TypeError, ValueError):
+        raise TossConfigError(
+            f"'trading.oco_expire_days' 값을 정수로 읽을 수 없습니다: {oco_expire_days!r}"
+        ) from None
+
     return TradingConfig(
         enabled=bool(raw_trading.get("enabled", False)),
         kill_switch_path=raw_trading.get("kill_switch_path")
@@ -362,6 +378,10 @@ def _parse_trading(raw_trading):
         limits=limits,
         universe=universe_rows,
         strategy_params=raw_trading.get("strategy_params") or {},
+        oco_expire_days=oco_expire_days,
+        oco_stop_loss_slippage=_decimal(
+            raw_trading.get("oco_stop_loss_slippage", "0.005"), "trading.oco_stop_loss_slippage"
+        ),
     )
 
 

@@ -195,6 +195,8 @@ class Store:
             "limit_price": _text(signal.limit_price),
             "currency": signal.currency,
             "reason": signal.reason,
+            "stop_loss_price": _text(signal.stop_loss_price),
+            "take_profit_price": _text(signal.take_profit_price),
             "payload": _json_safe(signal.meta) if signal.meta else None,
             "outcome": "accepted" if decision.approved else "rejected",
         }
@@ -268,8 +270,14 @@ class Store:
         Written ahead of the request on purpose: if the response never
         arrives, the attempt still left a trace, and the next run finds the
         client_order_id already taken rather than placing the order again.
+
+        ``stop_loss_price``/``take_profit_price`` are copied from the signal
+        that produced this order, not looked up later, because the
+        reconciler needs them once the entry fills and has no other way back
+        to the strategy's original intent - only the persisted order.
         """
         ts = ts or _now(precise=True)
+        signal = intent.signal
         doc = self.client.collection("orders").document(intent.client_order_id)
         try:
             doc.create(
@@ -289,6 +297,11 @@ class Store:
                     "mode": mode,
                     "order_id": None,
                     "error_code": None,
+                    "stop_loss_price": _text(getattr(signal, "stop_loss_price", None)),
+                    "take_profit_price": _text(getattr(signal, "take_profit_price", None)),
+                    "filled_quantity": "0",
+                    "oco_client_order_id": None,
+                    "oco_status": None,
                     "updated_at": ts,
                 }
             )
@@ -298,12 +311,18 @@ class Store:
 
     def update_order(self, client_order_id, **fields):
         """Patch an order document. Unknown columns are refused, not ignored."""
-        allowed = {"order_id", "status", "error_code", "signal_id"}
+        allowed = {
+            "order_id", "status", "error_code", "signal_id",
+            "filled_quantity", "oco_client_order_id", "oco_status",
+        }
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"수정할 수 없는 컬럼입니다: {sorted(unknown)}")
         if not fields:
             return None
+
+        if "filled_quantity" in fields:
+            fields["filled_quantity"] = _text(fields["filled_quantity"])
 
         fields["updated_at"] = _now(precise=True)
         self.client.collection("orders").document(client_order_id).update(fields)
@@ -319,6 +338,106 @@ class Store:
         query = (
             self.client.collection("orders")
             .order_by("ts", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+        return [{"client_order_id": doc.id, **doc.to_dict()} for doc in query.stream()]
+
+    #: Order states the reconciler still has work to do for. Everything else
+    #: (``simulated``, ``failed``, ``filled``, ``canceled``, ``rejected``) is
+    #: a resting state with nothing left to poll for.
+    _OPEN_ORDER_STATUSES = ["submitted", "unknown", "partially_filled"]
+
+    def pending_orders(self, mode="live"):
+        """Orders not yet settled. Filtered by mode - there is nothing to
+        poll a broker about for a PAPER order that was never sent."""
+        query = self.client.collection("orders").where(
+            filter=FieldFilter("mode", "==", mode)
+        ).where(filter=FieldFilter("status", "in", self._OPEN_ORDER_STATUSES))
+        return [{"client_order_id": doc.id, **doc.to_dict()} for doc in query.stream()]
+
+    # ---------------------------------------------------------------- fills
+
+    def save_fill(self, order_id, quantity, price, commission=None, tax=None, ts=None):
+        """Append one fill. Firestore assigns the id, since several fills can
+        arrive for the same order and none of their own fields are unique."""
+        ts = ts or _now(precise=True)
+        self.client.collection("fills").add(
+            {
+                "order_id": order_id,
+                "ts": ts,
+                "quantity": _text(quantity),
+                "price": _text(price),
+                "commission": _text(commission),
+                "tax": _text(tax),
+            }
+        )
+        return ts
+
+    def fills_for_order(self, order_id):
+        query = self.client.collection("fills").where(
+            filter=FieldFilter("order_id", "==", order_id)
+        )
+        return [doc.to_dict() for doc in query.stream()]
+
+    def recent_fills(self, limit=50):
+        query = (
+            self.client.collection("fills")
+            .order_by("ts", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+        return [doc.to_dict() for doc in query.stream()]
+
+    # --------------------------------------------------- conditional orders
+
+    def save_conditional_order(
+        self, client_order_id, entry_client_order_id, symbol, quantity,
+        take_profit_price, stop_loss_price, expire_date, status, mode, ts=None,
+    ):
+        """Record an OCO bracket, keyed by its own client_order_id so a
+        re-run of the reconciler recognises one it already placed."""
+        ts = ts or _now(precise=True)
+        doc = self.client.collection("conditional_orders").document(client_order_id)
+        try:
+            doc.create(
+                {
+                    "entry_client_order_id": entry_client_order_id,
+                    "symbol": symbol,
+                    "quantity": _text(quantity),
+                    "take_profit_price": _text(take_profit_price),
+                    "stop_loss_price": _text(stop_loss_price),
+                    "expire_date": expire_date,
+                    "status": status,
+                    "mode": mode,
+                    "error_code": None,
+                    "ts": ts,
+                    "updated_at": ts,
+                }
+            )
+        except AlreadyExists:
+            pass
+        return ts
+
+    def update_conditional_order(self, client_order_id, **fields):
+        allowed = {"status", "error_code"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"수정할 수 없는 컬럼입니다: {sorted(unknown)}")
+        if not fields:
+            return None
+        fields["updated_at"] = _now(precise=True)
+        self.client.collection("conditional_orders").document(client_order_id).update(fields)
+        return fields["updated_at"]
+
+    def conditional_order_by_client_id(self, client_order_id):
+        doc = self.client.collection("conditional_orders").document(client_order_id).get()
+        if not doc.exists:
+            return None
+        return {"client_order_id": doc.id, **doc.to_dict()}
+
+    def open_conditional_orders(self, limit=50):
+        query = (
+            self.client.collection("conditional_orders")
+            .where(filter=FieldFilter("status", "==", "registered"))
             .limit(limit)
         )
         return [{"client_order_id": doc.id, **doc.to_dict()} for doc in query.stream()]

@@ -173,9 +173,9 @@ def test_dry_run_writes_nothing(wired, firestore_client, capsys):
     assert "DRY-RUN" in capsys.readouterr().out
 
 
-def test_live_is_refused_before_the_reconciler_exists(capsys):
+def test_live_is_refused_until_step_10(capsys):
     assert trade.run(["--live"]) == trade.EXIT_LIVE_BLOCKED
-    assert "reconciler" in capsys.readouterr().err
+    assert "[10]" in capsys.readouterr().err
 
 
 def test_disabled_trading_does_nothing(tmp_path, monkeypatch):
@@ -183,3 +183,83 @@ def test_disabled_trading_does_nothing(tmp_path, monkeypatch):
     config = type(config)(**{**config.__dict__, "trading": TradingConfig()})
     monkeypatch.setattr(trade, "load_config", lambda: config)
     assert trade.run([]) == trade.EXIT_DISABLED
+
+
+# ---------------------------------------------------------- --reconcile (Phase 2 [9])
+
+
+class FakeLiveTrading:
+    """Stands in for a LIVE TradingApi during a --reconcile run."""
+
+    mode = trade.TradingMode.LIVE
+
+    def __init__(self):
+        self.conditional_orders = []
+
+    def get_order(self, order_id):
+        return {"filledQuantity": "10", "avgFillPrice": "69950"}
+
+    def list_orders(self, params=None):
+        return []
+
+    def place_conditional_order(self, body):
+        self.conditional_orders.append(body)
+        return {"conditionalOrderId": "COND-1"}
+
+
+def test_reconcile_settles_a_live_order_and_arms_its_bracket(
+    tmp_path, monkeypatch, capsys, firestore_client
+):
+    config = app_config(tmp_path)
+    monkeypatch.setattr(trade, "load_config", lambda: config)
+    fake_trading = FakeLiveTrading()
+    monkeypatch.setattr(trade, "build_trading_api", lambda *a, **k: fake_trading)
+
+    store = Store(firestore_client)
+    store.client.collection("orders").document("entry-1").set(
+        {
+            "ts": "2026-08-27T09:00:00", "strategy": "s", "symbol": "005930",
+            "side": "BUY", "order_type": "LIMIT", "quantity": "10",
+            "amount": None, "price": "70000", "currency": "KRW",
+            "notional_krw": "700000", "status": "submitted", "mode": "live",
+            "order_id": "TOSS-1", "error_code": None,
+            "stop_loss_price": "65000", "take_profit_price": "80000",
+            "filled_quantity": "0", "oco_client_order_id": None,
+            "oco_status": None, "updated_at": "2026-08-27T09:00:00",
+        }
+    )
+
+    assert trade.run(["--reconcile"]) == trade.EXIT_OK
+
+    order = store.order_by_client_id("entry-1")
+    assert order["status"] == "filled"
+    assert order["oco_status"] == "registered"
+    assert len(fake_trading.conditional_orders) == 1
+
+    out = capsys.readouterr().out
+    assert "filled" in out
+    assert "OCO 등록" in out
+
+
+def test_reconcile_with_nothing_pending_says_so(tmp_path, monkeypatch, capsys):
+    config = app_config(tmp_path)
+    monkeypatch.setattr(trade, "load_config", lambda: config)
+    monkeypatch.setattr(trade, "build_trading_api", lambda *a, **k: FakeLiveTrading())
+
+    assert trade.run(["--reconcile"]) == trade.EXIT_OK
+    assert "없습니다" in capsys.readouterr().out
+
+
+def test_reconcile_does_not_touch_strategies_or_the_risk_gate(
+    tmp_path, monkeypatch, capsys
+):
+    # --reconcile is a separate code path from the strategy-evaluation run;
+    # loading a strategy must not be required to poll for fills.
+    config = app_config(tmp_path)
+    config = type(config)(
+        **{**config.__dict__, "trading": TradingConfig(enabled=False)}
+    )
+    monkeypatch.setattr(trade, "load_config", lambda: config)
+    monkeypatch.setattr(trade, "build_trading_api", lambda *a, **k: FakeLiveTrading())
+
+    assert trade.run(["--reconcile"]) == trade.EXIT_OK

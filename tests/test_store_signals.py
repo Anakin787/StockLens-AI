@@ -92,3 +92,88 @@ def test_daily_usage_is_zero_on_a_quiet_day(store):
     usage = store.daily_usage("2026-08-26")
     assert usage.order_count == 0
     assert usage.notional_krw == Decimal("0")
+
+
+# ------------------------------------------------------- fills (Phase 2 [9])
+
+
+def test_a_fill_is_recorded_and_readable_back_by_order(store):
+    store.save_fill("TOSS-1", quantity=Decimal("10"), price=Decimal("69950"),
+                     commission=Decimal("15"), tax=Decimal("3"))
+
+    fills = store.fills_for_order("TOSS-1")
+    assert len(fills) == 1
+    assert fills[0]["quantity"] == "10"
+    assert fills[0]["commission"] == "15"
+
+
+def test_fills_for_a_different_order_are_not_mixed_in(store):
+    store.save_fill("TOSS-1", quantity=Decimal("10"), price=Decimal("70000"))
+    store.save_fill("TOSS-2", quantity=Decimal("5"), price=Decimal("71000"))
+
+    assert len(store.fills_for_order("TOSS-1")) == 1
+    assert len(store.fills_for_order("TOSS-2")) == 1
+
+
+# ------------------------------------------------ conditional orders (OCO)
+
+
+def test_a_conditional_order_is_recorded_and_readable(store):
+    store.save_conditional_order(
+        "oco-1", entry_client_order_id="entry-1", symbol="005930",
+        quantity=Decimal("10"), take_profit_price=Decimal("80000"),
+        stop_loss_price=Decimal("65000"), expire_date="2026-09-10",
+        status="registered", mode="live",
+    )
+
+    row = store.conditional_order_by_client_id("oco-1")
+    assert row["entry_client_order_id"] == "entry-1"
+    assert row["status"] == "registered"
+
+
+def test_a_second_save_with_the_same_id_does_not_overwrite(store):
+    # Idempotency: a re-run of the reconciler must not clobber a bracket it
+    # already placed, the same guarantee save_order gives entry orders.
+    store.save_conditional_order(
+        "oco-1", entry_client_order_id="entry-1", symbol="005930",
+        quantity=Decimal("10"), take_profit_price=Decimal("80000"),
+        stop_loss_price=Decimal("65000"), expire_date="2026-09-10",
+        status="registered", mode="live",
+    )
+    store.save_conditional_order(
+        "oco-1", entry_client_order_id="entry-1", symbol="005930",
+        quantity=Decimal("999"), take_profit_price=Decimal("1"),
+        stop_loss_price=Decimal("1"), expire_date="2099-01-01",
+        status="pending", mode="live",
+    )
+
+    assert store.conditional_order_by_client_id("oco-1")["status"] == "registered"
+
+
+def test_open_conditional_orders_only_lists_registered_ones(store):
+    store.save_conditional_order(
+        "oco-1", entry_client_order_id="e1", symbol="005930",
+        quantity=Decimal("1"), take_profit_price=Decimal("1"),
+        stop_loss_price=Decimal("1"), expire_date="2026-09-10",
+        status="registered", mode="live",
+    )
+    store.save_conditional_order(
+        "oco-2", entry_client_order_id="e2", symbol="AAPL",
+        quantity=Decimal("1"), take_profit_price=Decimal("1"),
+        stop_loss_price=Decimal("1"), expire_date="2026-09-10",
+        status="failed", mode="live",
+    )
+
+    open_ones = store.open_conditional_orders()
+    assert [row["client_order_id"] for row in open_ones] == ["oco-1"]
+
+
+def test_an_accepted_signal_carries_its_bracket_prices_for_the_reconciler(store):
+    bracketed = signal(
+        stop_loss_price=Decimal("65000"), take_profit_price=Decimal("80000")
+    )
+    store.save_decision(RiskDecision(signal=bracketed, intent=object()))
+
+    row = store.recent_signals()[0]
+    assert row["stop_loss_price"] == "65000"
+    assert row["take_profit_price"] == "80000"

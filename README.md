@@ -217,9 +217,10 @@ schtasks /Delete /TN "M7 Terminal Daily Report" /F           # 등록 해제
 ### 매매 엔진 (Phase 2 — PAPER)
 
 ```bash
-python trade.py             # PAPER — 시장을 읽고, 아무것도 전송하지 않음
-python trade.py --dry-run   # 리스크 게이트까지만. DB에 기록 없음
-python trade.py --live      # 현재 거부됨 (아래 참고)
+python trade.py               # PAPER — 시장을 읽고, 아무것도 전송하지 않음
+python trade.py --dry-run     # 리스크 게이트까지만. DB에 기록 없음
+python trade.py --reconcile   # 미체결 LIVE 주문의 체결을 확인하고 OCO를 등록
+python trade.py --live        # 현재 거부됨 (아래 참고)
 ```
 
 `config.yaml`의 `trading.enabled`를 켜고 `trading.strategies`에 직접 작성한 전략을 등록해야 동작합니다. 전략은 `Strategy`를 상속하고 `evaluate(ctx) -> list[Signal]`만 구현하며, **그 안에서 I/O를 하면 안 됩니다.**
@@ -231,7 +232,13 @@ python trade.py --live      # 현재 거부됨 (아래 참고)
 3. 리스크 게이트가 신호마다 통과/거부를 판정해 **승인·거부 전부** `signals`/`rejections`에 기록하고
 4. 승인된 것만 `orders`에 `simulated`로 남습니다 (HTTP 전송 없음)
 
-> **`--live`는 아직 열려 있지 않습니다.** reconciler(체결 동기화)와 OCO 손절이 붙기 전에는 제출한 주문이 실제로 어떻게 됐는지 확인할 방법이 없고, 대사되지 않은 실주문은 추적 불가능한 포지션입니다.
+**`--reconcile`은 별도 경로입니다.** 전략도 리스크 게이트도 거치지 않고, 미체결 LIVE 주문(`submitted`/`unknown`/`partially_filled`)을 `GET /orders`로 조회해 체결을 `fills`에 기록하고, 매수 신호가 `stop_loss_price`/`take_profit_price`를 실었다면 체결 수량만큼 OCO 손절을 등록합니다. 전략 평가는 하루 한 번이면 되지만 체결 확인은 더 자주 돌려야 하므로 갈라뒀습니다 — 스케줄러에 별도 주기로 등록하세요.
+
+> **`--live`는 아직 열려 있지 않습니다.** reconciler와 OCO는 이제 있지만, 설계 [10]이 요구하는 "최소 수량 1주로 실거래 검증"은 별도 단계입니다.
+
+**OCO는 진입 체결 이후에만 등록됩니다.** executor가 주문을 낼 때가 아니라 — 아직 체결되지 않은 주문에 손절을 거는 건 의미가 없고, 부분체결이면 그 수량만큼만 걸어야 합니다. 그래서 신호의 `stop_loss_price`/`take_profit_price`는 주문에 실려 저장되고, `--reconcile`이 체결을 확인한 뒤에야 조건주문을 보냅니다. 브라켓 만료일(`trading.oco_expire_days`)과 손절 주문가의 슬리피지(`trading.oco_stop_loss_slippage`)는 `config.example.yaml`을 참고하세요.
+
+> **알려진 한계**: 한국 주식의 실제 호가단위(가격대별로 1원~1,000원까지 계단식)는 적용하지 않습니다 — 확인된 근거가 없어 추측으로 규칙을 넣느니 `invalid-tick-size` 거부로 드러나게 뒀습니다. `GET /orders` 응답의 정확한 필드명(체결수량·평균단가 등)도 미확정이라 여러 철자를 방어적으로 시도합니다 — 시세·캘린더 파서와 같은 방식입니다.
 
 **긴급 정지**: 프로젝트 루트에 `KILL_SWITCH` 파일을 만들면 모든 발주가 즉시 중단됩니다. 코드 수정도 재시작도 필요 없습니다.
 
@@ -270,7 +277,7 @@ M7-Terminal/
 ├── config.example.yaml      # 설정 템플릿
 ├── scripts/smoke_test.py    # 읽기전용 연결 점검
 ├── docs/ui/                 # 대시보드 디자인 원본 (DESIGN.md, mockup.html)
-├── tests/                   # 195개 — 네트워크·자격증명 불필요
+├── tests/                   # 312개 — 네트워크·자격증명 불필요
 └── src/
     ├── config.py            # .env 우선 자격증명, 심볼 정규화, v1 하위호환
     ├── toss/
@@ -283,7 +290,7 @@ M7-Terminal/
     ├── portfolio.py         # 소스 병합 → KRW 환산 스냅샷
     ├── models.py            # Position · PortfolioSnapshot (전 구간 Decimal)
     ├── strategy/            # base.py(Signal · Strategy) · loader.py
-    ├── execution/           # risk.py(리스크 게이트) · executor.py · context.py · ids.py
+    ├── execution/           # risk.py(리스크 게이트) · executor.py · reconciler.py(체결·OCO) · context.py · ids.py
     ├── store/               # Firestore (스냅샷 · 포지션 · 리포트 · 신호 · 주문)
     ├── dashboard/           # FastAPI + 정적 프론트엔드
     ├── news.py              # Google News RSS

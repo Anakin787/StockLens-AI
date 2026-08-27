@@ -319,3 +319,29 @@ def test_idempotency_conflict_is_recorded_before_it_raises(firestore_client):
 def test_order_body_refuses_an_intent_with_no_id():
     with pytest.raises(ValueError):
         order_body(intent())
+
+
+# ------------------------------------------------------- OCO bracket carry
+
+
+def test_the_submitted_order_carries_the_signals_bracket_prices(firestore_client):
+    """The reconciler has no other way back to the strategy's intent -
+    only the persisted order - so the bracket prices have to ride along."""
+    bracketed = signal(
+        stop_loss_price=Decimal("65000"), take_profit_price=Decimal("80000")
+    )
+    engine, _ = executor(firestore_client, FakeTrading(mode=TradingMode.PAPER))
+    record = engine.submit(intent(signal=bracketed))
+
+    row = engine.store.order_by_client_id(record.client_order_id)
+    assert row["stop_loss_price"] == "65000"
+    assert row["take_profit_price"] == "80000"
+
+
+def test_an_order_with_no_bracket_stores_none(firestore_client):
+    engine, _ = executor(firestore_client, FakeTrading(mode=TradingMode.PAPER))
+    record = engine.submit(intent())
+
+    row = engine.store.order_by_client_id(record.client_order_id)
+    assert row["stop_loss_price"] is None
+    assert row["take_profit_price"] is None
