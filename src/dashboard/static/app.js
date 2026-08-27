@@ -574,14 +574,6 @@ const AUDIT_LABELS = {
   limits: "리스크 한도", veto: "AI 보류", candidate: "AI 제안",
 };
 
-// Two actors, two very different weights of claim: "human" is inferred from
-// the OS user of whichever process noticed the edit, "ai" is exact. The badge
-// colours say so at a glance rather than in a footnote nobody reads.
-const AUDIT_TONE = {
-  human: "bg-primary-container/30 text-primary border-primary/40",
-  ai: "bg-secondary-container/25 text-secondary border-secondary/40",
-};
-
 // How the change time was recovered decides how much it can be trusted, so
 // the page says which - a git commit dates the edit exactly and names its
 // author, an mtime is the last write to the whole file, and neither is a
@@ -638,12 +630,6 @@ async function loadAudit() {
     const head = document.createElement("div");
     head.className = "flex items-center gap-2 flex-wrap";
 
-    const badge = document.createElement("span");
-    badge.className =
-      "px-2 py-0.5 rounded border text-label-caps font-bold tracking-wide " +
-      (AUDIT_TONE[entry.actor_kind] || AUDIT_TONE.human);
-    badge.textContent = entry.actor_kind === "ai" ? "AI" : "사람";
-
     const category = document.createElement("span");
     category.className = "font-semibold text-on-surface";
     category.textContent = AUDIT_LABELS[entry.category] || entry.category;
@@ -660,7 +646,7 @@ async function loadAudit() {
       when.textContent = "변경 시각 불명";
       when.className = "font-data-mono text-xs text-on-surface-variant/50 ml-auto";
     }
-    head.append(badge, category, when);
+    head.append(category, when);
 
     const who = document.createElement("p");
     who.className = "text-xs text-on-surface-variant/60 mt-1";
