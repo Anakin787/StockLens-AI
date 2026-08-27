@@ -20,7 +20,42 @@ from src.news import NewsFetcher, portfolio_keywords
 from src.notion import NotionReporter
 from src.pipeline import PortfolioService, apply_name_overrides
 from src.store.repo import Store
+from src.strategy.universe import parse_universe
 from src.toss.errors import TossError
+from src.universe_review import UniverseReviewer
+
+
+def _review_universe(config, snapshot, news_data, store):
+    """Ask the model which universe members to pause and what to consider.
+
+    Returns None when there is nothing to report, which is the ordinary
+    outcome: on a day with no delisting or halt in the headlines, an empty
+    veto list is the correct answer, not a failure.
+    """
+    reviewer = UniverseReviewer(config)
+    if not reviewer.enabled:
+        return None
+
+    print(">>> AI universe review...")
+    held = [p.symbol for p in snapshot.positions if p.symbol]
+    universe = parse_universe(config.trading.universe)
+    review = reviewer.review(universe.symbols(), held, news_data)
+    if review.error:
+        print(f"    건너뜀: {review.error}")
+        return None
+
+    if review.vetoes or review.candidates:
+        store.save_universe_review(review, ttl_days=config.analyst.veto_ttl_days)
+    for veto in review.vetoes:
+        print(f"    보류: {veto.symbol} [{veto.category}] {veto.reason}")
+    if review.candidates:
+        print(
+            "    편입 후보(검토용): "
+            + ", ".join(c.symbol for c in review.candidates)
+        )
+    if not review.vetoes:
+        print("    보류할 종목 없음 (정상)")
+    return review
 
 
 def run():
@@ -78,13 +113,22 @@ def run():
     print(">>> AI Analyst is thinking...")
     ai_comment = Analyst(config).analyze_portfolio(snapshot, news_data)
 
+    # 4b. AI universe review. Runs on the same headlines the analyst just
+    #     read, and is the one AI output with teeth: an accepted veto pauses
+    #     new buys of that symbol until it expires. Candidates are advisory
+    #     and stop at the report. Failure here degrades the report, never the
+    #     trading run - active vetoes simply stay whatever they already were.
+    review = _review_universe(config, snapshot, news_data, store)
+
     # 5. Notion
     if not config.notion.is_configured:
         print("ERROR: Please set your valid Notion Token in config.yaml")
         return 1
 
     print(">>> Reporting to Notion...")
-    report = NotionReporter(config).create_report(snapshot, news_data, ai_comment)
+    report = NotionReporter(config).create_report(
+        snapshot, news_data, ai_comment, universe_review=review
+    )
     if report.get("page_id"):
         store.save_report(
             report["page_id"],

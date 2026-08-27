@@ -171,6 +171,82 @@ class Store:
         )
         return [{"page_id": doc.id, **doc.to_dict()} for doc in query.stream()]
 
+    # ------------------------------------------------- universe review (AI)
+
+    def save_universe_review(self, review, ttl_days=7, ts=None):
+        """Persist one AI universe review: vetoes that expire, advice that does not.
+
+        Vetoes are keyed by symbol and carry ``expires_at``, so a veto nobody
+        renews lapses on its own. Nothing an AI said yesterday stays in force
+        because the batch job stopped running - and re-raising the same veto
+        tomorrow simply pushes the expiry out.
+
+        Candidates are appended, never keyed: the point of the list is what it
+        suggested and when, so a later run must not overwrite the record of an
+        earlier suggestion the user is still thinking about.
+        """
+        ts = ts or _now(precise=True)
+        expires_at = (
+            datetime.fromisoformat(ts) + timedelta(days=max(int(ttl_days), 0))
+        ).isoformat()
+
+        vetoes = self.client.collection("universe_vetoes")
+        for veto in getattr(review, "vetoes", ()) or ():
+            vetoes.document(veto.symbol).set(
+                {
+                    "symbol": veto.symbol,
+                    "category": veto.category,
+                    "reason": veto.reason,
+                    "evidence": veto.evidence,
+                    "ts": ts,
+                    "expires_at": expires_at,
+                }
+            )
+
+        candidates = [
+            {
+                "symbol": candidate.symbol,
+                "name": candidate.name,
+                "reason": candidate.reason,
+            }
+            for candidate in getattr(review, "candidates", ()) or ()
+        ]
+        if candidates:
+            self.client.collection("universe_candidates").document(ts).set(
+                {"ts": ts, "candidates": candidates}
+            )
+        return ts
+
+    def active_vetoes(self, now=None):
+        """``{symbol: reason}`` for vetoes that have not expired.
+
+        Expiry is compared here rather than in the query for the same reason
+        every other range scan in this module is: a composite index per
+        deployment is real setup friction for a collection this small.
+        """
+        now = (now or datetime.now()).isoformat()
+        active = {}
+        for doc in self.client.collection("universe_vetoes").stream():
+            data = doc.to_dict() or {}
+            expires_at = data.get("expires_at")
+            if expires_at and expires_at <= now:
+                continue
+            active[doc.id] = data.get("reason") or data.get("category") or "AI 보류"
+        return active
+
+    def clear_veto(self, symbol):
+        """Lift one veto immediately, without waiting for it to expire."""
+        self.client.collection("universe_vetoes").document(symbol).delete()
+
+    def latest_universe_candidates(self, limit=1):
+        """The most recent candidate suggestions, newest run first."""
+        query = (
+            self.client.collection("universe_candidates")
+            .order_by("ts", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+        return [doc.to_dict() for doc in query.stream()]
+
     # --------------------------------------------------------------- signals
 
     def save_decision(self, decision, ts=None):

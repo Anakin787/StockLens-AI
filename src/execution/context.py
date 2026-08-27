@@ -75,9 +75,26 @@ def build_context(
         sessions=_sessions(service, now),
         daily_usage=store.daily_usage(now.strftime("%Y-%m-%d")),
         kill_switch=kill_switch_active(kill_switch_path),
+        blocked_symbols=_blocked_symbols(store, now),
         history=history or {},
         recent=tuple(recent),
     )
+
+
+def _blocked_symbols(store, now):
+    """Unexpired AI vetoes, or none at all if they cannot be read.
+
+    The one place in this module where a failed read widens what is
+    permitted, and it does so knowingly: a veto is an extra restriction on top
+    of the mechanical limits, so losing it degrades the run to exactly the
+    behaviour of every run before this feature existed. Refusing to trade
+    because an advisory list was unavailable would be the worse failure.
+    """
+    try:
+        return store.active_vetoes(now)
+    except Exception as exc:  # noqa: BLE001 - advisory data, never fatal
+        print(f"경고: AI 보류 목록을 읽지 못했습니다 ({exc}) - 보류 없이 진행합니다.")
+        return {}
 
 
 def _prices(service, symbols):

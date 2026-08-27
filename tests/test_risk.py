@@ -121,6 +121,34 @@ def test_market_intent_drops_the_limit_price():
 # ------------------------------------------------------------ kill switch
 
 
+def test_a_vetoed_symbol_cannot_be_bought():
+    decision = evaluate(buy(), context(blocked_symbols={"005930": "상장폐지 절차"}))
+    assert rule_of(decision) == "symbol-vetoed"
+    assert "상장폐지 절차" in decision.rejection.detail
+
+
+def test_a_veto_never_blocks_a_sell():
+    # A veto is a reason not to add exposure, never a reason to dump the
+    # position - selling stays the strategy's decision.
+    decision = evaluate(
+        buy(side=SIDE_SELL, quantity=Decimal("10")),
+        context(blocked_symbols={"005930": "거래정지"}),
+    )
+    assert decision.approved
+
+
+def test_a_veto_on_another_symbol_is_ignored():
+    decision = evaluate(buy(), context(blocked_symbols={"AAPL": "합병"}))
+    assert decision.approved
+
+
+def test_the_kill_switch_still_outranks_a_veto():
+    decision = evaluate(
+        buy(), context(kill_switch=True, blocked_symbols={"005930": "거래정지"})
+    )
+    assert rule_of(decision) == "kill-switch"
+
+
 def test_kill_switch_stops_everything():
     decision = evaluate(buy(), context(kill_switch=True))
     assert rule_of(decision) == "kill-switch"

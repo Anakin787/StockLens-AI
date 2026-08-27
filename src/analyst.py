@@ -15,6 +15,37 @@ from google.genai import types
 DEFAULT_THINKING_LEVEL = "low"
 
 
+def ai_settings(config):
+    """``(api_key, model, thinking_level)`` from an AppConfig or a raw mapping.
+
+    Shared with :mod:`src.universe_review`, which talks to the same model with
+    the same key - one place to read that configuration means the two cannot
+    drift into disagreeing about which model is configured.
+    """
+    analyst_cfg = getattr(config, "analyst", None)
+    if analyst_cfg is not None:
+        return (
+            analyst_cfg.api_key,
+            analyst_cfg.model,
+            analyst_cfg.thinking_level,
+        )
+    google_ai = config.get("google_ai", {}) if hasattr(config, "get") else {}
+    return (
+        google_ai.get("api_key"),
+        google_ai.get("model", "gemini-3.7-flash"),
+        google_ai.get("thinking_level", DEFAULT_THINKING_LEVEL),
+    )
+
+
+def gemini_client(api_key):
+    """A client, or None when no key is configured.
+
+    None rather than a raised error: an unset AI key means the report runs
+    without commentary, which has always been a supported state.
+    """
+    return genai.Client(api_key=api_key) if api_key else None
+
+
 def _pct(rate):
     if rate is None:
         return "-"
@@ -81,7 +112,7 @@ class Analyst:
                 if isinstance(raw, dict) and raw.get("name")
             ]
 
-        self.client = genai.Client(api_key=self.api_key) if self.api_key else None
+        self.client = gemini_client(self.api_key)
 
     def _config(self):
         """Build the request config.

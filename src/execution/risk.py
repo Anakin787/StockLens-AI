@@ -185,6 +185,19 @@ class RiskGate:
                 signal, "kill-switch", "KILL_SWITCH가 활성화되어 모든 발주를 중단합니다."
             )
 
+        # 1b. Per-symbol pause. A veto only ever blocks a *buy*: it is a
+        #     reason not to add exposure, never a reason to dump a position
+        #     into whatever price the news just made. Selling stays with the
+        #     strategy, which can be backtested; this cannot.
+        if signal.is_buy:
+            blocked = (ctx.blocked_symbols or {}).get(signal.symbol)
+            if blocked:
+                return _reject(
+                    signal,
+                    "symbol-vetoed",
+                    f"{signal.symbol} 신규 매수가 보류 중입니다: {blocked}",
+                )
+
         usage = ctx.daily_usage or DailyUsage()
 
         # 2. Daily order count.

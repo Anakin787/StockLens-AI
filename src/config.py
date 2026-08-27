@@ -41,6 +41,32 @@ def is_placeholder(value):
     return bool(value) and str(value).startswith(_PLACEHOLDER_PREFIX)
 
 
+def _as_bool(value, default):
+    """Read a YAML-ish truth value, falling back rather than raising.
+
+    An unreadable optional flag must not stop the daily report; the default
+    is the conservative reading in every case it is used.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("true", "yes", "on", "1"):
+        return True
+    if text in ("false", "no", "off", "0"):
+        return False
+    return default
+
+
+def _as_int(value, default):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
 def normalize_symbol(symbol):
     """Convert a yfinance-style ticker to Toss notation.
 
@@ -157,6 +183,19 @@ class AnalystConfig:
     api_key: str | None = None
     model: str = DEFAULT_AI_MODEL
     thinking_level: str = DEFAULT_THINKING_LEVEL
+
+    #: Ask the model, once per daily report, which universe members look
+    #: structurally broken (a veto) and which non-members are worth a human
+    #: look (a proposal). See src/universe_review.py for why those two powers
+    #: are not symmetric.
+    universe_review: bool = True
+    #: Hard ceiling on vetoes per run. A model that decides everything is
+    #: broken must not be able to halt the whole strategy.
+    max_vetoes: int = 3
+    max_candidates: int = 5
+    #: A veto lapses this many days after the run that raised it, unless a
+    #: later run raises it again. Nothing an AI says stays true by default.
+    veto_ttl_days: int = 7
 
 
 DEFAULT_KILL_SWITCH_PATH = "KILL_SWITCH"
@@ -477,6 +516,10 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
         api_key=None if is_placeholder(ai_key) else ai_key,
         model=raw_ai.get("model") or DEFAULT_AI_MODEL,
         thinking_level=raw_ai.get("thinking_level") or DEFAULT_THINKING_LEVEL,
+        universe_review=_as_bool(raw_ai.get("universe_review"), True),
+        max_vetoes=_as_int(raw_ai.get("max_vetoes"), 3),
+        max_candidates=_as_int(raw_ai.get("max_candidates"), 5),
+        veto_ttl_days=_as_int(raw_ai.get("veto_ttl_days"), 7),
     )
 
     return AppConfig(

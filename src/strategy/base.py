@@ -186,6 +186,13 @@ class StrategyContext:
     daily_usage: DailyUsage = field(default_factory=DailyUsage)
     kill_switch: bool = False
 
+    #: ``{symbol: reason}`` for symbols whose *new buys* are paused - today
+    #: the AI universe review writes these (src/universe_review.py). Read by
+    #: the risk gate, never by a strategy: a strategy that could see the veto
+    #: list would start reasoning about it, and the whole point is that this
+    #: is a backstop applied after the strategy has had its say.
+    blocked_symbols: dict = field(default_factory=dict)
+
     #: symbol -> PriceHistory, ending at (and including) the most recent
     #: completed session at or before ``now``. Populated by the context
     #: builder - live or backtest - never fetched here: an indicator a

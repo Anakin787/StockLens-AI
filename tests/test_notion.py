@@ -211,3 +211,36 @@ def test_markdown_nested_bullets_become_children():
     assert top["rich_text"][0]["text"]["content"] == "Top item"
     nested = top["children"][0]["bulleted_list_item"]
     assert nested["rich_text"][0]["text"]["content"] == "Nested item"
+
+
+def test_the_universe_review_separates_what_was_applied_from_what_was_only_suggested(snapshot):
+    """A reader must never have to work out which AI list already changed the
+    engine's behaviour and which is waiting on them."""
+    from src.universe_review import Candidate, UniverseReview, Veto
+
+    pages = FakePages({"properties": {}})
+    review = UniverseReview(
+        vetoes=(
+            Veto(symbol="INTC", category="trading_halt", reason="거래정지", evidence="halted"),
+        ),
+        candidates=(Candidate(symbol="ASML", name="ASML", reason="장비 노출"),),
+    )
+
+    NotionReporter(config_for(), client=FakeClient(pages=pages)).create_report(
+        snapshot, {}, universe_review=review
+    )
+
+    text = str(pages.created["children"])
+    assert "자동 적용됨" in text and "INTC" in text
+    assert "자동 반영 안 됨" in text and "ASML" in text
+
+
+def test_an_empty_universe_review_adds_no_section(snapshot):
+    from src.universe_review import UniverseReview
+
+    pages = FakePages({"properties": {}})
+    NotionReporter(config_for(), client=FakeClient(pages=pages)).create_report(
+        snapshot, {}, universe_review=UniverseReview()
+    )
+
+    assert "AI Universe Review" not in str(pages.created["children"])

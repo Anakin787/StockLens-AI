@@ -178,6 +178,10 @@ def run(argv=None):
             f"    보유 {len(ctx.positions)}종목 · 시세 {len(ctx.prices)}건 · "
             f"오늘 주문 {ctx.daily_usage.order_count}건"
         )
+        # Named, not counted: a paused symbol changes what this run can do,
+        # and "2종목 보류" would leave the reader to guess which two.
+        for symbol, reason in sorted((ctx.blocked_symbols or {}).items()):
+            print(f"    보류(AI): {symbol} — {reason}")
 
         signals = []
         for strategy in strategies:

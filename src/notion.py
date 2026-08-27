@@ -119,7 +119,7 @@ class NotionReporter:
             }
         return properties
 
-    def create_report(self, snapshot, news_data, ai_comment=None):
+    def create_report(self, snapshot, news_data, ai_comment=None, universe_review=None):
         """Create a page under the configured database or page.
 
         Returns {page_id, url, title}.
@@ -154,7 +154,35 @@ class NotionReporter:
             for warning in snapshot.warnings:
                 children_blocks.append(self._create_bullet_block(warning))
 
-        # 5. News
+        # 5. AI universe review. Placed above the news it was derived from,
+        #    and split in two on purpose: one list already changed what the
+        #    engine will do, the other is a suggestion nobody has acted on.
+        #    A reader must never have to work out which is which.
+        if universe_review is not None and not universe_review.is_empty:
+            children_blocks.append(self._create_heading_block("🤖 AI Universe Review"))
+            if universe_review.vetoes:
+                children_blocks.append(
+                    self._create_subheading_block("신규 매수 보류 (자동 적용됨)")
+                )
+                for veto in universe_review.vetoes:
+                    children_blocks.append(
+                        self._create_bullet_block(
+                            f"{veto.symbol} [{veto.category}] — {veto.reason} "
+                            f"(근거: {veto.evidence})"
+                        )
+                    )
+            if universe_review.candidates:
+                children_blocks.append(
+                    self._create_subheading_block("편입 후보 제안 (검토용 · 자동 반영 안 됨)")
+                )
+                for candidate in universe_review.candidates:
+                    children_blocks.append(
+                        self._create_bullet_block(
+                            f"{candidate.symbol} ({candidate.name}) — {candidate.reason}"
+                        )
+                    )
+
+        # 6. News
         children_blocks.append(self._create_heading_block("📰 Economic News"))
         children_blocks.append(self._create_subheading_block("General Economy"))
         for item in news_data.get("general", []):

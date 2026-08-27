@@ -80,6 +80,18 @@ google_ai:
   # tokens and latency than this job needs. "off" omits the setting.
   thinking_level: "low"
 
+  # 매일 리포트 때 AI에게 유니버스를 한 번 검토시킵니다(src/universe_review.py).
+  # 두 권한의 무게가 다릅니다:
+  #   - 거부권: 유니버스 종목의 "신규 매수"만 보류시킵니다. 자동 적용되지만,
+  #     상장폐지·거래정지·피인수·티커변경·회계조사·파산 같은 구조적 사실이고
+  #     헤드라인 근거를 인용할 때만 통과합니다. 매도는 절대 못 시킵니다.
+  #   - 후보 제안: 유니버스 밖 종목을 추천만 합니다. 자동 반영되지 않습니다 —
+  #     유니버스 편입은 사람이 이 파일을 고치는 일로 남습니다.
+  universe_review: true
+  max_vetoes: 3          # 한 번에 보류할 수 있는 최대 종목 수 (전량 정지 방지)
+  max_candidates: 5
+  veto_ttl_days: 7       # 이 기간이 지나면 보류는 자동 해제됩니다
+
 notion:
   token: "secret_YOUR_NOTION_TOKEN_HERE"
   database_id: "YOUR_DATABASE_ID"
