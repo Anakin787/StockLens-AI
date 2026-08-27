@@ -18,6 +18,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+from src.backtest.benchmarks import dca_curve, summarize_curve
 from src.backtest.engine import Backtester, BacktestConfig
 from src.backtest.fills import ContributionSchedule, FillModel
 from src.config import load_config
@@ -47,6 +48,11 @@ def parse_args(argv=None):
         "--refresh", action="store_true", help="시세 캐시만 갱신하고 종료 (백테스트 실행 안 함)"
     )
     parser.add_argument("--split", default=None, help="인/아웃오브샘플 분리 기준일 (YYYY-MM-DD)")
+    parser.add_argument(
+        "--no-compare",
+        action="store_true",
+        help="전략을 안 썼을 때(균등 DCA·벤치마크 DCA)와의 비교를 생략합니다",
+    )
     return parser.parse_args(argv)
 
 
@@ -65,7 +71,12 @@ def _print_report(label, result):
     print(f"    MDD: {m['mdd']:.2%}" if m["mdd"] is not None else "    MDD: 계산 불가")
     print(f"    거래 {m['trade_count']}건", end="")
     if m["win_rate"] is not None:
-        print(f" · 승률 {m['win_rate']:.1%} · 평균익 {m['avg_win_usd']:.1f} · 평균손 {m['avg_loss_usd']:.1f}")
+        # A run with no losing trade (or no winning one) leaves the matching
+        # average at None - all-winners is a real outcome for a strategy that
+        # only ever sells on a trend break, not a missing number to hide.
+        avg_win = f"{m['avg_win_usd']:.1f}" if m["avg_win_usd"] is not None else "-"
+        avg_loss = f"{m['avg_loss_usd']:.1f}" if m["avg_loss_usd"] is not None else "-"
+        print(f" · 승률 {m['win_rate']:.1%} · 평균익 {avg_win} · 평균손 {avg_loss}")
     else:
         print()
     if m["rejections_by_rule"]:
@@ -77,6 +88,39 @@ def _print_report(label, result):
                 f"      {mode}: {bucket['trade_count']}건, "
                 f"{bucket['pnl_usd']:.1f} USD, 종목 {bucket['symbols']}"
             )
+
+
+def _print_comparison(result, history, backtest_config, benchmark):
+    """The strategy against the same money with no strategy at all.
+
+    Printed by default, not behind a flag, because a strategy's own CAGR is
+    not evidence of anything on a universe assembled with hindsight - only
+    the gap to buying that same universe outright is.
+    """
+    dates = history[benchmark].dates
+    rows = [
+        (f"유니버스 {len(history)}종목 균등 DCA", sorted(history)),
+        (f"{benchmark} DCA", [benchmark]),
+    ]
+    print()
+    print("--- 전략을 안 썼다면 (같은 기간·같은 적립) ---")
+    for label, symbols in rows:
+        stats = summarize_curve(
+            dca_curve(
+                history,
+                symbols,
+                dates,
+                backtest_config.contribution,
+                backtest_config.initial_krw,
+                backtest_config.fx_rate,
+            )
+        )
+        twr = f"{stats['twr_cagr']:.2%}" if stats["twr_cagr"] is not None else "계산 불가"
+        mdd = f"{stats['mdd']:.2%}" if stats["mdd"] is not None else "계산 불가"
+        print(f"    {label}: TWR {twr} · MDD {mdd} · 최종 {stats['final_equity_krw']:,.0f}원")
+    strategy_twr = result.metrics["twr_cagr"]
+    if strategy_twr is not None:
+        print(f"    (전략: TWR {strategy_twr:.2%} · MDD {result.metrics['mdd']:.2%})")
 
 
 def run(argv=None):
@@ -129,6 +173,9 @@ def run(argv=None):
 
     result = Backtester(strategy, history, backtest_config).run()
     _print_report("전체 구간", result)
+
+    if not args.no_compare:
+        _print_comparison(result, history, backtest_config, benchmark)
 
     if args.split:
         split_day = date.fromisoformat(args.split)

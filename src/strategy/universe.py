@@ -259,8 +259,22 @@ def _index(symbol, name, leverage="1", max_weight="0.30"):
 
 #: The agreed default. Editable in config; the policy rules above still apply
 #: to whatever config says.
+#:
+#: Deliberately wider than the seven names anyone would name today. A universe
+#: assembled from the winners of the last decade gives a momentum ranking
+#: nothing to rank: the 2026-08-27 backtest showed the strategy *losing* to an
+#: equal-weight buy of its own twelve-name universe (33.9%/57.7% MDD vs
+#: 38.1%/55.6%), and beating equal-weight only once the same list was widened
+#: with large caps that were obvious 2012 holdings and turned out not to be
+#: winners (31.1% vs 30.3%, and 29.4% vs 27.2% from 2016). The ranking works -
+#: it just needs losers in the list to reject. Which of these names is which,
+#: over the years ahead, is exactly what is not knowable now.
+#:
+#: Sector spread is the point, not a view on any one name. Every symbol here
+#: has a 2010+ daily history, so the whole list is backtestable over one span.
 DEFAULT_UNIVERSE = Universe(
     (
+        # --- mega-cap tech, the concentrated core ---
         _stock("AAPL", "Apple"),
         _stock("MSFT", "Microsoft"),
         _stock("NVDA", "NVIDIA"),
@@ -268,6 +282,40 @@ DEFAULT_UNIVERSE = Universe(
         _stock("AMZN", "Amazon"),
         _stock("META", "Meta Platforms"),
         _stock("TSLA", "Tesla"),
+        # --- semiconductors and hardware ---
+        _stock("AVGO", "Broadcom"),
+        _stock("AMD", "Advanced Micro Devices"),
+        _stock("TXN", "Texas Instruments"),
+        _stock("QCOM", "Qualcomm"),
+        _stock("INTC", "Intel"),
+        _stock("CSCO", "Cisco Systems"),
+        # --- software and internet ---
+        _stock("ORCL", "Oracle"),
+        _stock("CRM", "Salesforce"),
+        _stock("ADBE", "Adobe"),
+        _stock("NFLX", "Netflix"),
+        _stock("IBM", "IBM"),
+        # --- financials ---
+        _stock("JPM", "JPMorgan Chase"),
+        _stock("V", "Visa"),
+        _stock("MA", "Mastercard"),
+        # --- healthcare ---
+        _stock("LLY", "Eli Lilly"),
+        _stock("UNH", "UnitedHealth"),
+        _stock("JNJ", "Johnson & Johnson"),
+        # --- consumer ---
+        _stock("COST", "Costco"),
+        _stock("HD", "Home Depot"),
+        _stock("WMT", "Walmart"),
+        _stock("MCD", "McDonald's"),
+        _stock("DIS", "Walt Disney"),
+        _stock("PG", "Procter & Gamble"),
+        _stock("KO", "Coca-Cola"),
+        # --- energy and industrials ---
+        _stock("XOM", "Exxon Mobil"),
+        _stock("CVX", "Chevron"),
+        _stock("CAT", "Caterpillar"),
+        # --- index ETFs ---
         _index("QQQ", "Invesco QQQ Trust", max_weight="0.60"),
         _index("SOXX", "iShares Semiconductor ETF", max_weight="0.30"),
         _index("SMH", "VanEck Semiconductor ETF", max_weight="0.30"),

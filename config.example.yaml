@@ -115,8 +115,9 @@ trading:
     # 낮으면 momentum_dca는 로드 시점에 즉시 실패합니다(의도된 동작: 매 주문마다
     # position-weight-limit로 거부되는 것보다 시작 전에 아는 편이 낫습니다).
     # 커스텀 유니버스를 쓴다면 각 종목의 max_weight에 맞게 조정하세요.
+    # (목록이 긴 이유는 유니버스가 넓기 때문입니다 — 승자만 모은 목록에서는
+    #  모멘텀 순위가 고를 것이 없다는 게 2026-08-27 백테스트의 결론입니다.)
     max_position_weight_overrides:
-      QQQ: 0.60
       AAPL: 0.35
       MSFT: 0.35
       NVDA: 0.35
@@ -124,6 +125,34 @@ trading:
       AMZN: 0.35
       META: 0.35
       TSLA: 0.35
+      AVGO: 0.35
+      AMD: 0.35
+      TXN: 0.35
+      QCOM: 0.35
+      INTC: 0.35
+      CSCO: 0.35
+      ORCL: 0.35
+      CRM: 0.35
+      ADBE: 0.35
+      NFLX: 0.35
+      IBM: 0.35
+      JPM: 0.35
+      V: 0.35
+      MA: 0.35
+      LLY: 0.35
+      UNH: 0.35
+      JNJ: 0.35
+      COST: 0.35
+      HD: 0.35
+      WMT: 0.35
+      MCD: 0.35
+      DIS: 0.35
+      PG: 0.35
+      KO: 0.35
+      XOM: 0.35
+      CVX: 0.35
+      CAT: 0.35
+      QQQ: 0.60
       SOXX: 0.30
       SMH: 0.30
       QLD: 0.15   # 2배 레버리지 — 개별주보다 더 타이트하게
