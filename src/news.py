@@ -2,6 +2,25 @@ import feedparser
 import urllib.parse
 from datetime import datetime
 
+
+def portfolio_keywords(snapshot):
+    """Distinct display names of currently held positions, in holding order.
+
+    Feeds the report's news search with the account's actual stocks, not
+    just the static macro keywords in config - "news about what I hold", not
+    only "news about the economy in general". A company's display name (from
+    Toss, or the name given in config.yaml for a manual holding) is used
+    rather than the ticker: matched against Google News, a name like
+    "삼성전자" surfaces far more than the bare symbol "005930" would.
+    """
+    seen = []
+    for position in getattr(snapshot, "positions", None) or []:
+        name = (getattr(position, "name", None) or "").strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
 class NewsFetcher:
     def __init__(self, config):
         self.keywords = config.get('news', {}).get('keywords', [])

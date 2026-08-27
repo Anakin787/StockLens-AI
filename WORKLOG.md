@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-27 — 리포트: 보유 종목별 뉴스
+
+리포트의 "📰 Economic News"가 `config.yaml`에 손으로 적은 매크로 키워드(반도체·환율)만 검색했다. 실제 보유 종목 관련 기사는 없었다.
+
+`NewsFetcher`는 이미 키워드별 섹션을 처리할 수 있었고(`news_data["keywords"]`), Notion 렌더링도 키워드마다 `News: {keyword}` 서브헤딩을 이미 그리고 있었다 — 빠진 건 "보유 종목 이름을 키워드에 넣어주는 것"뿐이었다.
+
+`src/news.py`에 `portfolio_keywords(snapshot)` 추가 — 보유 포지션의 표시 이름(티커가 아니라 이름: "005930"보다 "삼성전자"가 Google News에서 훨씬 잘 걸림)을 중복 없이 뽑는다. `main.py`가 이걸 `config.news_keywords`에 이어붙여 `NewsFetcher`에 넘긴다.
+
+**검증**: 실제 계좌로 실행 — IONX(2x IonQ ETF), TSLL(2x TSLA) 둘 다 관련 기사가 잡혔다(TSLL은 테슬라 주주 구조 기사, IONX는 디파이언스 ETF 기사). 신규 테스트 4개 포함 전체 324개 통과.
+
+**다음 후보**: AI Analyst 프롬프트(`src/analyst.py`)는 아직 `news_data["general"]`만 보고 종목별 뉴스는 안 읽는다 — 원하면 같이 넣을 수 있음.
+
+---
+
 ## 2026-08-27 — 매매전략 Opus 재검토 반영 (LIVE 전 필수 6건)
 
 전략을 실거래에 붙이기 전 Opus 어드바이저로 한 번 더 검토했다. "반드시 고칠 것" 6건 중 4건 수정, 1건은 문서화로 결론, 1건은 검증 과제로 남김.

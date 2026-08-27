@@ -16,7 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from src.analyst import Analyst
 from src.config import load_config
-from src.news import NewsFetcher
+from src.news import NewsFetcher, portfolio_keywords
 from src.notion import NotionReporter
 from src.pipeline import PortfolioService, apply_name_overrides
 from src.store.repo import Store
@@ -60,10 +60,19 @@ def run():
     ts = store.save_snapshot(snapshot)
     print(f">>> Snapshot saved ({ts}, total {store.snapshot_count()} rows)")
 
-    # 3. News
+    # 3. News - the configured macro keywords, plus one per currently held
+    #    stock, so the report also surfaces news about the actual portfolio
+    #    and not only the general economy.
     print(">>> Fetching news...")
-    news_data = NewsFetcher({"news": {"keywords": config.news_keywords}}).fetch_daily_news()
-    print(f"Fetched {len(news_data.get('general', []))} general news items.")
+    keywords = list(config.news_keywords)
+    for name in portfolio_keywords(snapshot):
+        if name not in keywords:
+            keywords.append(name)
+    news_data = NewsFetcher({"news": {"keywords": keywords}}).fetch_daily_news()
+    print(
+        f"Fetched {len(news_data.get('general', []))} general news items, "
+        f"{len(news_data.get('keywords', {}))} keyword sections ({', '.join(keywords)})."
+    )
 
     # 4. AI analysis
     print(">>> AI Analyst is thinking...")
