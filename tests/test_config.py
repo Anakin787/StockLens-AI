@@ -150,6 +150,69 @@ def test_static_asset_with_price_is_accepted(tmp_path):
     assert holding.price == Decimal("5400000")
 
 
+def test_savings_plans_parse_with_decimal_amounts(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        portfolio:
+          savings:
+            - name: "청년미래적금"
+              monthly_krw: 500000
+              kind: "적금"
+        """,
+    )
+    plan = load_config(path, load_env=False).savings_plans[0]
+
+    assert plan.name == "청년미래적금"
+    assert plan.monthly_krw == Decimal("500000")
+    assert isinstance(plan.monthly_krw, Decimal)
+    assert plan.kind == "적금"
+
+
+def test_savings_plan_kind_defaults_when_omitted(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        portfolio:
+          savings:
+            - name: "비상금 CMA"
+              monthly_krw: 100000
+        """,
+    )
+    assert load_config(path, load_env=False).savings_plans[0].kind == "적금"
+
+
+def test_savings_plan_needs_a_name(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        portfolio:
+          savings:
+            - monthly_krw: 500000
+        """,
+    )
+    with pytest.raises(TossConfigError, match="name"):
+        load_config(path, load_env=False)
+
+
+def test_savings_plan_needs_a_monthly_amount(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        portfolio:
+          savings:
+            - name: "청년미래적금"
+        """,
+    )
+    with pytest.raises(TossConfigError, match="monthly_krw"):
+        load_config(path, load_env=False)
+
+
+def test_no_savings_section_is_an_empty_list(tmp_path):
+    path = write_config(tmp_path, "portfolio:\n  manual: []\n")
+    assert load_config(path, load_env=False).savings_plans == []
+
+
 def test_amounts_are_decimal_not_float(tmp_path):
     path = write_config(
         tmp_path,

@@ -91,6 +91,22 @@ class ManualHolding:
 
 
 @dataclass(frozen=True)
+class SavingsPlan:
+    """A recurring safe-asset contribution outside the brokerage account.
+
+    Not a position - no ticker, no market value, nothing for the portfolio
+    aggregator to price. It exists purely as a fact handed to the AI analyst
+    (src/analyst.py) so its risk and allocation commentary accounts for safe
+    assets the user already builds elsewhere (a 적금, a CMA, a pension
+    contribution, ...) instead of judging the brokerage account in isolation.
+    """
+
+    name: str
+    monthly_krw: Decimal
+    kind: str = "적금"
+
+
+@dataclass(frozen=True)
 class TossConfig:
     client_id: str
     client_secret: str
@@ -186,6 +202,7 @@ class AppConfig:
     notion: NotionConfig
     analyst: AnalystConfig
     manual_holdings: list = field(default_factory=list)
+    savings_plans: list = field(default_factory=list)
     news_keywords: list = field(default_factory=list)
     trading: TradingConfig = field(default_factory=TradingConfig)
 
@@ -285,6 +302,36 @@ def _parse_manual_holdings(raw_portfolio):
             )
         )
     return holdings
+
+
+def _parse_savings_plans(raw_portfolio):
+    """Read portfolio.savings - recurring safe-asset contributions.
+
+    Unlike manual holdings these are not looked up anywhere; they carry no
+    ticker to price. A malformed entry fails at load time rather than
+    quietly not showing up in the AI's context, the same convention
+    ``_parse_manual_holdings`` follows.
+    """
+    entries = raw_portfolio.get("savings") or []
+    plans = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise TossConfigError(f"portfolio.savings[{index}]가 매핑이 아닙니다: {entry!r}")
+
+        name = entry.get("name")
+        if not name:
+            raise TossConfigError(f"portfolio.savings[{index}]에 'name'이 없습니다.")
+
+        monthly_krw = _decimal(
+            entry.get("monthly_krw"), f"portfolio.savings[{index}].monthly_krw"
+        )
+        if monthly_krw is None:
+            raise TossConfigError(f"portfolio.savings[{index}]에 'monthly_krw'가 없습니다.")
+
+        plans.append(
+            SavingsPlan(name=name, monthly_krw=monthly_krw, kind=entry.get("kind") or "적금")
+        )
+    return plans
 
 
 #: Limit names accepted under ``trading.limits``, and how to read each one.
@@ -429,6 +476,7 @@ def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
         notion=notion,
         analyst=analyst,
         manual_holdings=_parse_manual_holdings(raw_portfolio),
+        savings_plans=_parse_savings_plans(raw_portfolio),
         news_keywords=list(raw_news.get("keywords") or []),
         trading=_parse_trading(raw_trading),
     )

@@ -21,6 +21,39 @@ def _pct(rate):
     return f"{Decimal(rate) * 100:+.2f}%"
 
 
+def _savings_str(plans):
+    """Recurring safe-asset contributions, formatted for the prompt.
+
+    Duck-typed on ``.name``/``.monthly_krw``/``.kind`` rather than importing
+    ``SavingsPlan`` - a plain dict with the same attributes would not satisfy
+    an isinstance check, and this only ever reads, never constructs one.
+    """
+    lines = []
+    for plan in plans or []:
+        name = getattr(plan, "name", None)
+        monthly = getattr(plan, "monthly_krw", None)
+        if not name or monthly is None:
+            continue
+        kind = getattr(plan, "kind", None) or "적금"
+        lines.append(f"- {name} ({kind}): {Decimal(str(monthly)):,.0f} KRW/month")
+    return "\n".join(lines) or "None"
+
+
+def _keyword_news_str(news_data, limit=3):
+    """Per-keyword headlines - macro keywords and, since [holding-news],
+    held-stock names alike. A flat list keyed only by keyword: the analyst
+    does not need to know which keywords came from config.yaml and which
+    came from the portfolio to comment on them."""
+    lines = []
+    for keyword, items in (news_data or {}).get("keywords", {}).items():
+        if not items:
+            continue
+        lines.append(f"- {keyword}:")
+        for item in items[:limit]:
+            lines.append(f"  - {item['title']}")
+    return "\n".join(lines) or "None"
+
+
 class Analyst:
     def __init__(self, config):
         analyst_cfg = getattr(config, "analyst", None)
@@ -28,6 +61,7 @@ class Analyst:
             self.api_key = analyst_cfg.api_key
             self.model_name = analyst_cfg.model
             self.thinking_level = analyst_cfg.thinking_level
+            self.savings_plans = list(getattr(config, "savings_plans", None) or [])
         else:  # raw mapping, kept for the module's standalone use
             google_ai = config.get("google_ai", {})
             self.api_key = google_ai.get("api_key")
@@ -35,6 +69,17 @@ class Analyst:
             self.thinking_level = google_ai.get(
                 "thinking_level", DEFAULT_THINKING_LEVEL
             )
+            from src.config import SavingsPlan
+
+            self.savings_plans = [
+                SavingsPlan(
+                    name=raw.get("name"),
+                    monthly_krw=Decimal(str(raw.get("monthly_krw", 0))),
+                    kind=raw.get("kind") or "적금",
+                )
+                for raw in (config.get("portfolio", {}) or {}).get("savings") or []
+                if isinstance(raw, dict) and raw.get("name")
+            ]
 
         self.client = genai.Client(api_key=self.api_key) if self.api_key else None
 
@@ -83,6 +128,9 @@ class Analyst:
             for news in news_data.get("general", [])[:5]:
                 news_str += f"- {news['title']}\n"
 
+            keyword_news_str = _keyword_news_str(news_data)
+            savings_str = _savings_str(self.savings_plans)
+
             warnings_str = "\n".join(f"- {w}" for w in snapshot.warnings) or "None"
 
             prompt = f"""
@@ -110,10 +158,17 @@ class Analyst:
             Recent Market News Keywords:
             {news_str}
 
+            Keyword & Holding-Specific News (each holding's own name is
+            searched, alongside any macro keywords from config):
+            {keyword_news_str}
+
+            Recurring Safe-Asset Contributions Outside This Brokerage Account:
+            {savings_str}
+
             Please provide a response in the following format (Korean):
             1. **Market Outlook**: Brief assessment of the market situation based on the news.
-            2. **Portfolio Strategy**: Specific advice on whether to hold, buy, or sell specific stocks in the portfolio. Reference today's change and any risk warnings.
-            3. **Recommendation**: Suggest one sector or type of asset to watch closely (e.g., "Look into AI semiconductors" or "Bond ETFs").
+            2. **Portfolio Strategy**: Specific advice on whether to hold, buy, or sell specific stocks in the portfolio. Reference today's change, any risk warnings, and anything notable in that stock's own news above - do not repeat a headline verbatim, summarise what it implies for the position.
+            3. **Recommendation**: Suggest one sector or type of asset to watch closely (e.g., "Look into AI semiconductors" or "Bond ETFs"). If safe-asset contributions are listed above, factor them into the overall risk picture - they are already part of the user's total allocation, so do not recommend adding more cash-equivalents purely to diversify; instead comment on whether the brokerage account's own aggressiveness makes sense given that existing safety net.
 
             Keep the tone professional yet encouraging.
             """

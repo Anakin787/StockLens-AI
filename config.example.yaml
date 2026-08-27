@@ -45,6 +45,16 @@ portfolio:
     #   price: 5400000
     #   currency: "KRW"
 
+  # Recurring safe-asset contributions outside this brokerage account - not
+  # a position (no ticker, no market value looked up anywhere), just context
+  # fed to the AI Analyst so its risk/allocation advice accounts for safe
+  # assets already being built elsewhere (a 적금, a CMA, a pension, ...)
+  # instead of judging this account's aggressiveness in isolation.
+  # savings:
+  #   - name: "청년미래적금"
+  #     monthly_krw: 500000
+  #     kind: "적금"
+
 news:
   keywords:
     - "반도체"
