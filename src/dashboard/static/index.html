@@ -300,10 +300,14 @@
         <div class="p-4 border-b border-outline-variant/50 flex items-center justify-between gap-4 flex-wrap">
           <div>
             <h3 class="text-headline-md font-bold">Audit Log</h3>
-            <p class="text-on-surface-variant/60 text-sm mt-0.5">
+            <p class="text-on-surface-variant/60 text-sm mt-0.5 max-w-3xl">
               유니버스·전략·파라미터·리스크 한도 변경과 AI 검토 결과의 기록입니다.
-              시각은 <strong>변경 시각이 아니라 시스템이 처음 감지한 시각</strong>입니다 —
-              config.yaml을 토요일에 고치고 월요일에 실행하면 월요일로 찍힙니다.
+              큰 시각은 <strong>변경 시각</strong>(설정이 담긴 파일 기준)이고, 그 아래
+              작은 줄에 근거(<span class="font-data-mono text-xs">git 커밋</span> ·
+              <span class="font-data-mono text-xs">파일 수정시각</span>)와
+              <strong>감지 시각</strong>을 함께 적었습니다. git 커밋은 정확하고, 파일
+              수정시각은 그 파일의 마지막 저장이라 근사치입니다 — 시각에 마우스를 올리면
+              설명이 나옵니다.
             </p>
           </div>
           <div class="flex gap-1 shrink-0" id="audit-filters">
@@ -363,6 +367,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=2"></script>
+<script src="/static/app.js?v=3"></script>
 </body>
 </html>

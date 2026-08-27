@@ -582,6 +582,20 @@ const AUDIT_TONE = {
   ai: "bg-secondary-container/25 text-secondary border-secondary/40",
 };
 
+// How the change time was recovered decides how much it can be trusted, so
+// the page says which - a git commit dates the edit exactly and names its
+// author, an mtime is the last write to the whole file, and neither is a
+// claim about who was sitting at the keyboard.
+const AUDIT_METHOD = {
+  git: { label: "git 커밋", title: "추적 중인 소스 파일의 마지막 커밋 시각과 작성자입니다. 정확합니다." },
+  mtime: { label: "파일 수정시각", title: "파일이 마지막으로 저장된 시각입니다. 이 변경이 아니라 그 파일의 마지막 저장이라, 같은 파일의 다른 부분을 나중에 고쳤다면 그 시각이 찍힙니다." },
+  direct: { label: "실행 시점", title: "AI 검토가 방금 만든 항목이라 변경과 감지 사이에 간격이 없습니다." },
+};
+
+function fmtStamp(value) {
+  return (value || "").replace("T", " ").slice(0, 19);
+}
+
 function auditChangeLine(change) {
   const before = change.before === null || change.before === undefined ? "—" : String(change.before);
   const after = change.after === null || change.after === undefined ? "—" : String(change.after);
@@ -635,14 +649,25 @@ async function loadAudit() {
     category.textContent = AUDIT_LABELS[entry.category] || entry.category;
 
     const when = document.createElement("span");
-    when.className = "font-data-mono text-xs text-on-surface-variant/60 ml-auto";
-    when.textContent = (entry.detected_at || "").replace("T", " ").slice(0, 19);
-
+    when.className = "font-data-mono text-xs text-on-surface ml-auto";
+    const method = AUDIT_METHOD[entry.changed_by_method];
+    if (entry.changed_at) {
+      when.textContent = fmtStamp(entry.changed_at);
+      when.title = method ? method.title : "";
+    } else {
+      // No recoverable change time - say so rather than showing detection
+      // time in the slot a reader will read as "when it changed".
+      when.textContent = "변경 시각 불명";
+      when.className = "font-data-mono text-xs text-on-surface-variant/50 ml-auto";
+    }
     head.append(badge, category, when);
 
     const who = document.createElement("p");
     who.className = "text-xs text-on-surface-variant/60 mt-1";
-    who.textContent = `${entry.actor || "—"} · ${entry.source || "—"}`;
+    const parts = [entry.actor || "—", entry.source || "—"];
+    if (method) parts.push(method.label);
+    parts.push(`감지 ${fmtStamp(entry.detected_at)}`);
+    who.textContent = parts.join(" · ");
 
     const summary = document.createElement("p");
     summary.className = "text-sm text-on-surface-variant mt-1";

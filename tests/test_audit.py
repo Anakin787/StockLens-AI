@@ -126,13 +126,14 @@ def test_entries_carry_the_actor_and_a_readable_summary():
         fingerprint(trading(), universe_of("AAPL")),
         fingerprint(trading(), universe_of("AAPL", "MSFT")),
     )
-    entry = entries_from_diff(changes, actor="jiun@box")[0]
+    entry = entries_from_diff(changes, trading(), actor="jiun@box")[0]
 
     assert entry["actor_kind"] == ACTOR_HUMAN
     assert entry["actor"] == "jiun@box"
     assert "MSFT" in entry["summary"]
-    # Not "changed_at" - this is when a process first saw it.
-    assert "detected_at" in entry and "changed_at" not in entry
+    # Both timestamps: when the setting changed, and when we noticed.
+    assert entry["detected_at"]
+    assert entry["changed_by_method"] in ("git", "mtime", None)
 
 
 def test_a_review_logs_vetoes_and_candidates_as_separate_entries():
@@ -190,3 +191,63 @@ def test_a_broken_store_does_not_stop_the_caller():
     # The report must still run; an audit log that can kill the daily job
     # gets deleted the first time it does.
     assert record_config_changes(Exploding(), trading(), universe_of("AAPL")) == []
+
+
+# ------------------------------------------------------- when it changed
+
+
+def test_a_config_backed_category_is_dated_from_the_file():
+    entry = entries_from_diff(
+        {"limits": [{"target": "max_orders_per_day", "before": "10", "after": "4"}]},
+        trading(),
+    )[0]
+
+    # config.yaml is untracked on purpose (it holds secrets), so git cannot
+    # date it and mtime is the honest fallback.
+    assert entry["source"] == "config.yaml"
+    assert entry["changed_by_method"] == "mtime"
+    assert entry["changed_at"]
+
+
+def test_a_code_backed_universe_is_dated_from_git_with_a_real_author():
+    # An empty trading.universe means DEFAULT_UNIVERSE, which is source code -
+    # tracked, so the commit gives an exact time and a real name.
+    entry = entries_from_diff(
+        {"universe": [{"target": "MSFT", "before": None, "after": "추가"}]},
+        trading(universe=[]),
+    )[0]
+
+    assert entry["source"] == "src/strategy/universe.py"
+    assert entry["changed_by_method"] in ("git", "mtime")
+    if entry["changed_by_method"] == "git":
+        assert entry["actor"] and "@" not in entry["actor"]  # commit author, not user@host
+
+
+def test_a_universe_declared_in_config_is_dated_from_config():
+    entry = entries_from_diff(
+        {"universe": [{"target": "MSFT", "before": None, "after": "추가"}]},
+        trading(universe=[{"symbol": "MSFT"}]),
+    )[0]
+
+    assert entry["source"] == "config.yaml"
+
+
+def test_an_unreadable_source_still_produces_an_entry():
+    from src.audit import change_origin
+
+    origin = change_origin("no/such/file.yaml")
+
+    # detected_at alone still carries the entry; changed_at is simply absent
+    # rather than invented.
+    assert origin["changed_at"] is None
+    assert origin["changed_by_method"] is None
+
+
+def test_an_ai_entry_needs_no_recovery_because_it_just_happened():
+    review = UniverseReview(
+        vetoes=(Veto(symbol="INTC", category="trading_halt", reason="정지", evidence="h"),),
+    )
+    entry = review_entries(review, detected_at="2026-08-27T10:00:00")[0]
+
+    assert entry["changed_at"] == entry["detected_at"]
+    assert entry["changed_by_method"] == "direct"
