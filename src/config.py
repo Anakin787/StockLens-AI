@@ -479,10 +479,66 @@ def _parse_trading(raw_trading):
     )
 
 
+#: Where the Firebase service account lives when nothing says otherwise.
+DEFAULT_SERVICE_ACCOUNT = "secrets/firebase-service-account.json"
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _translate_path(path):
+    """Yield the same file as WSL and as Windows would spell it.
+
+    This repository is genuinely used from both: interactive work happens
+    under WSL (``/mnt/c/...``) while the scheduled daily report runs from
+    Windows Task Scheduler (``C:\\...``). A ``.env`` written on one side
+    names a path the other cannot open, and the failure surfaces as a
+    DefaultCredentialsError deep inside google.auth hours later, in a log
+    nobody is watching.
+    """
+    yield path
+    lowered = path.replace("\\", "/")
+    if lowered.startswith("/mnt/") and len(lowered) > 6 and lowered[6] == "/":
+        drive = lowered[5].upper()
+        yield f"{drive}:\\" + lowered[7:].replace("/", "\\")
+    elif len(lowered) > 2 and lowered[1] == ":":
+        yield "/mnt/" + lowered[0].lower() + lowered[2:]
+
+
+def resolve_service_account(value=None, root=None):
+    """An openable path to the service account JSON, or None.
+
+    Tries, in order: the configured path as written, the same path spelled
+    for the other OS, and finally the repository's own ``secrets/`` copy.
+    Returns None when none of them exist - the caller leaves the environment
+    alone and lets google.auth report the original path, which is the one
+    the user actually wrote and can fix.
+    """
+    root = root or _REPO_ROOT
+    candidates = []
+    if value:
+        candidates.extend(_translate_path(str(value)))
+        candidates.append(os.path.join(root, os.path.basename(str(value))))
+    candidates.append(os.path.join(root, DEFAULT_SERVICE_ACCOUNT))
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _fix_service_account_env(root=None):
+    """Point GOOGLE_APPLICATION_CREDENTIALS at a file that actually opens."""
+    configured = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    resolved = resolve_service_account(configured, root=root)
+    if resolved and resolved != configured:
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = resolved
+    return resolved
+
+
 def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
     """Build an AppConfig from .env plus config.yaml."""
     if load_env and load_dotenv is not None:
         load_dotenv()
+    _fix_service_account_env()
 
     raw = _load_yaml(path)
     raw_toss = raw.get("toss") or {}

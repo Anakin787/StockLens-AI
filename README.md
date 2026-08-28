@@ -301,6 +301,37 @@ M7-Terminal/
     └── notion.py            # Notion 리포트 생성
 ```
 
+### 자동 실행은 Windows 파이썬으로 돕니다
+
+일일 리포트는 Windows 작업 스케줄러(`M7 Terminal Daily Report`)가
+`run_report.bat --scheduled`를 부르고, 그 배치는 **Windows 파이썬**을 씁니다.
+WSL에서 개발한다면 파이썬 환경이 둘이라는 뜻입니다 — `requirements.txt`가
+바뀌면 **양쪽 다** 설치해야 합니다:
+
+```
+# WSL
+pip install -r requirements.txt
+# Windows (PowerShell)
+python -m pip install -r requirements.txt
+```
+
+의존성이 한쪽에만 깔린 상태는 조용합니다. 손으로 돌릴 땐 잘 되고 스케줄러만
+매일 실패하며, 그 실패는 `logs/report_YYYY-MM-DD.log` 안에서만 보입니다.
+
+`.env`의 `GOOGLE_APPLICATION_CREDENTIALS`는 어느 쪽 표기로 적어도 됩니다.
+`load_config()`가 WSL(`/mnt/c/...`)과 Windows(`C:\...`) 표기를 서로 바꿔 가며
+찾고, 그래도 없으면 저장소의 `secrets/firebase-service-account.json`을 씁니다.
+
+**스케줄러가 도는지 확인하는 법** (PowerShell):
+
+```powershell
+Get-ScheduledTaskInfo -TaskName 'M7 Terminal Daily Report' |
+  Format-List LastRunTime, LastTaskResult   # 0이면 정상
+```
+
+`LastTaskResult`가 0이 아니면 `logs\report_<날짜>.log`의 마지막 `----- exit N -----`
+바로 위를 보세요. 종료 코드는 2=토스 API 오류, 3=그 외 예외입니다.
+
 ### 감사 로그 — 누가 언제 뭘 바꿨나
 
 유니버스·전략 목록·전략 파라미터·리스크 한도가 바뀌면 다음 실행 때

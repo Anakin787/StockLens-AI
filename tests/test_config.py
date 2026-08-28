@@ -471,3 +471,52 @@ def test_strategy_params_pass_through_unvalidated():
 
     trading = _parse_trading({"strategy_params": {"top_n": 2, "rebalance_weekday": 0}})
     assert trading.strategy_params == {"top_n": 2, "rebalance_weekday": 0}
+
+
+# ------------------------------------- service account path, WSL vs Windows
+
+
+def test_a_wsl_path_resolves_when_only_the_windows_file_exists(tmp_path, monkeypatch):
+    """The scheduled report runs from Windows, interactive work from WSL, and
+    a .env written on one side names a path the other cannot open."""
+    from src.config import resolve_service_account
+
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    key = secrets / "firebase-service-account.json"
+    key.write_text("{}", encoding="utf-8")
+
+    # A path spelled for the other OS, which does not exist here at all.
+    resolved = resolve_service_account(
+        "/mnt/z/nowhere/secrets/firebase-service-account.json", root=str(tmp_path)
+    )
+
+    assert resolved == str(key)
+
+
+def test_an_existing_path_is_left_exactly_as_written(tmp_path):
+    from src.config import resolve_service_account
+
+    key = tmp_path / "elsewhere.json"
+    key.write_text("{}", encoding="utf-8")
+
+    assert resolve_service_account(str(key), root=str(tmp_path)) == str(key)
+
+
+def test_no_configured_path_falls_back_to_the_repository_copy(tmp_path):
+    from src.config import resolve_service_account
+
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    key = secrets / "firebase-service-account.json"
+    key.write_text("{}", encoding="utf-8")
+
+    assert resolve_service_account(None, root=str(tmp_path)) == str(key)
+
+
+def test_nothing_openable_returns_none_rather_than_a_guess(tmp_path):
+    # The caller then leaves the environment alone, so google.auth reports the
+    # path the user actually wrote - the one they can fix.
+    from src.config import resolve_service_account
+
+    assert resolve_service_account("/nope/missing.json", root=str(tmp_path)) is None
