@@ -30,6 +30,19 @@ ONE = Decimal("1")
 #: The hard ceiling. Not a default - there is no config key that raises it.
 MAX_LEVERAGE = Decimal("2")
 
+#: Which part of the portfolio a holding belongs to. The strategy allocates a
+#: target share of equity to each bucket and fills it independently, so a bad
+#: year in one does not quietly redirect money into another.
+#:
+#: SAFE is not ranked - it is held because it is meant to be there when the
+#: rest falls, and ranking it by momentum would sell it in exactly the weeks
+#: it exists for. CORE and GROWTH are ranked, separately, so a speculative
+#: name never competes for a core slot on a hot quarter.
+BUCKET_SAFE = "SAFE"
+BUCKET_CORE = "CORE"
+BUCKET_GROWTH = "GROWTH"
+BUCKETS = (BUCKET_SAFE, BUCKET_CORE, BUCKET_GROWTH)
+
 KIND_STOCK = "STOCK"
 KIND_INDEX_ETF = "INDEX_ETF"
 KIND_SINGLE_STOCK_ETF = "SINGLE_STOCK_ETF"
@@ -73,9 +86,17 @@ class Instrument:
     max_weight: Decimal = Decimal("0.25")
     enabled: bool = True
 
+    #: Which bucket's target weight this instrument competes for.
+    bucket: str = BUCKET_CORE
+
     def __post_init__(self):
         if not self.symbol:
             raise UniverseError("symbol이 비어 있습니다.")
+        if self.bucket not in BUCKETS:
+            raise UniverseError(
+                f"{self.symbol}: bucket은 {sorted(BUCKETS)} 중 하나여야 합니다: "
+                f"{self.bucket!r}"
+            )
         if self.kind not in KINDS:
             raise UniverseError(
                 f"{self.symbol}: kind는 {sorted(KINDS)} 중 하나여야 합니다: {self.kind!r}"
@@ -159,6 +180,14 @@ class Universe:
         """Enabled symbols, in declaration order."""
         return tuple(i.symbol for i in self.enabled())
 
+    def by_bucket(self, bucket, allow_leverage=True):
+        """Enabled instruments in one bucket, in declaration order."""
+        return tuple(
+            i
+            for i in self.tradable(allow_leverage=allow_leverage)
+            if i.bucket == bucket
+        )
+
     def tradable(self, allow_leverage=True):
         """Enabled instruments, optionally with the leveraged ones removed.
 
@@ -200,6 +229,7 @@ _INSTRUMENT_FIELDS = frozenset(
         "underlying",
         "max_weight",
         "enabled",
+        "bucket",
     }
 )
 
@@ -243,6 +273,41 @@ def _stock(symbol, name, max_weight="0.35"):
         symbol=symbol,
         name=name,
         kind=KIND_STOCK,
+        max_weight=Decimal(max_weight),
+    )
+
+
+def _safe(symbol, name, max_weight="0.15"):
+    """A holding whose job is to not fall with the rest.
+
+    Bought and held to a fixed target share, never ranked. Momentum has
+    nothing useful to say about an asset held for its behaviour in the weeks
+    momentum is wrong.
+    """
+    return Instrument(
+        symbol=symbol,
+        name=name,
+        kind=KIND_INDEX_ETF,
+        bucket=BUCKET_SAFE,
+        max_weight=Decimal(max_weight),
+    )
+
+
+def _growth(symbol, name, max_weight="0.12"):
+    """A young company in an industry that may matter later.
+
+    Capped tighter than anything in CORE, and deliberately short: a name
+    belongs here only after a human put it in config, which is the same
+    asymmetry ``src/universe_review.py`` enforces - the model may propose,
+    only a person may add. Backtests of this bucket prove very little, since
+    every candidate is a recent listing chosen with hindsight; that is a
+    reason to keep the bucket small, not a reason to pretend otherwise.
+    """
+    return Instrument(
+        symbol=symbol,
+        name=name,
+        kind=KIND_STOCK,
+        bucket=BUCKET_GROWTH,
         max_weight=Decimal(max_weight),
     )
 
@@ -311,14 +376,12 @@ DEFAULT_UNIVERSE = Universe(
         _stock("DIS", "Walt Disney"),
         _stock("PG", "Procter & Gamble"),
         _stock("KO", "Coca-Cola"),
-        # --- higher-volatility growth ---
-        # Capped tighter than the mega caps, not because the ranking cannot
-        # see the risk - vol_adjust already divides its score by realized
-        # volatility, which will keep it out of the top two most weeks - but
-        # because the weeks it does win are exactly the weeks a full-size
-        # position would hurt. Its history starts 2021, so a backtest that
-        # begins earlier drops it outright and says so.
-        _stock("IONQ", "IonQ", max_weight="0.20"),
+        # --- future-growth industries (GROWTH bucket) ---
+        # Its history starts 2021, so any backtest reaching further back
+        # measures this bucket over a fraction of the span - which is the
+        # honest state of a bucket made of young companies, not a defect to
+        # paper over.
+        _growth("IONQ", "IonQ"),
         # --- energy and industrials ---
         _stock("XOM", "Exxon Mobil"),
         _stock("CVX", "Chevron"),
@@ -330,5 +393,14 @@ DEFAULT_UNIVERSE = Universe(
         # 2x index funds only, and capped tighter than anything else here.
         _index("QLD", "ProShares Ultra QQQ (2x)", leverage="2", max_weight="0.15"),
         _index("SSO", "ProShares Ultra S&P500 (2x)", leverage="2", max_weight="0.15"),
+        # --- safe assets (SAFE bucket) ---
+        # Two of them, against two different bad weeks. A short-duration
+        # Treasury fund barely moves when equities fall; gold can fall with
+        # them for a stretch but is the one holding here that does not care
+        # what interest rates do. Holding only one would leave the other
+        # scenario uncovered, and both have daily history back past 2005, so
+        # neither shortens the span a backtest can cover.
+        _safe("SHY", "iShares 1-3 Year Treasury Bond ETF"),
+        _safe("GLD", "SPDR Gold Shares"),
     )
 )

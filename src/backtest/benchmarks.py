@@ -17,8 +17,10 @@ from decimal import Decimal
 from src.backtest.metrics import EquityPoint, cagr_from_twr, mdd_from_twr, twr_index
 from src.models import ZERO
 
+ONE = Decimal("1")
 
-def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate):
+
+def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate, weights=None):
     """Equity curve of an equal-weight DCA into ``symbols`` over ``dates``.
 
     Contributions follow the same schedule the strategy run used, so the two
@@ -31,6 +33,15 @@ def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate):
     used: a constant here against a real series there would show up as a
     currency return on one curve only, and the comparison is the only thing
     these curves exist for.
+
+    ``weights`` (``{symbol: share}``) makes the split unequal. It exists for
+    one comparison in particular: a strategy holding 20% in short-term
+    Treasuries loses about a fifth of the equity return by construction, and
+    reading that against an all-equity curve would call an intended shape a
+    failure. The blended benchmark holds the same shape with no ranking in
+    it. Shares of symbols that have no bar on a given day are redistributed
+    across those that do, so an early date does not quietly park part of the
+    deposit in nothing.
     """
     rate_of = fx_rate if callable(fx_rate) else (lambda _day: fx_rate)
     closes = {
@@ -55,9 +66,21 @@ def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate):
 
         tradable = [symbol for symbol, series in closes.items() if day in series]
         if cash_krw and tradable:
-            per_symbol_usd = (cash_krw / fx) / Decimal(len(tradable))
+            if weights:
+                live = {s: weights.get(s, ZERO) for s in tradable}
+                total = sum(live.values(), ZERO)
+                split = (
+                    {s: w / total for s, w in live.items()}
+                    if total > ZERO
+                    else {s: ONE / Decimal(len(tradable)) for s in tradable}
+                )
+            else:
+                split = {s: ONE / Decimal(len(tradable)) for s in tradable}
+            cash_usd = cash_krw / fx
             for symbol in tradable:
-                shares[symbol] += per_symbol_usd / closes[symbol][day]
+                if split[symbol] <= ZERO:
+                    continue
+                shares[symbol] += (cash_usd * split[symbol]) / closes[symbol][day]
 
         equity_usd = sum(
             (shares[symbol] * closes[symbol][day] for symbol in tradable), ZERO

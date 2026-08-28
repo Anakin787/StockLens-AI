@@ -11,6 +11,7 @@ share a code path.
 import argparse
 import sys
 from datetime import date, timedelta
+from decimal import Decimal
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -28,7 +29,7 @@ from src.data.yahoo import YahooBarSource
 from src.execution.risk import RiskLimits
 from src.strategy.loader import load_strategy
 from src.strategy.momentum_dca import MomentumDcaStrategy
-from src.strategy.universe import parse_universe
+from src.strategy.universe import BUCKET_SAFE, parse_universe
 from src.toss.errors import TossConfigError
 
 DEFAULT_STRATEGY = "src.strategy.momentum_dca:MomentumDcaStrategy"
@@ -108,7 +109,30 @@ def _print_report(label, result):
             )
 
 
-def _print_comparison(result, history, backtest_config, benchmark, fx_history=None):
+def _safe_blend(strategy, history):
+    """``({symbol: share}, safe_share)`` matching the strategy's own shape.
+
+    Only defined for a strategy that declares bucket weights; the older
+    single-bucket strategy has no safe sleeve and gets no blended row.
+    """
+    weights = getattr(getattr(strategy, "params", None), "weights", None)
+    if not isinstance(weights, dict):
+        return None, None
+    safe_share = weights.get(BUCKET_SAFE)
+    universe = getattr(strategy, "universe", None)
+    if not safe_share or safe_share <= 0 or universe is None:
+        return None, None
+    safe = [i.symbol for i in universe.by_bucket(BUCKET_SAFE) if i.symbol in history]
+    risky = [s for s in sorted(history) if s not in safe]
+    if not safe or not risky:
+        return None, None
+    blend = {s: safe_share / Decimal(len(safe)) for s in safe}
+    risky_share = Decimal(1) - safe_share
+    blend.update({s: risky_share / Decimal(len(risky)) for s in risky})
+    return blend, safe_share
+
+
+def _print_comparison(result, history, backtest_config, benchmark, fx_history=None, strategy=None):
     """The strategy against the same money with no strategy at all.
 
     Printed by default, not behind a flag, because a strategy's own CAGR is
@@ -130,12 +154,27 @@ def _print_comparison(result, history, backtest_config, benchmark, fx_history=No
             last = _series.as_of(day).last()
             return last.close if last is not None else _fallback
     rows = [
-        (f"유니버스 {len(history)}종목 균등 DCA", sorted(history)),
-        (f"{benchmark} DCA", [benchmark]),
+        (f"유니버스 {len(history)}종목 균등 DCA", sorted(history), None),
+        (f"{benchmark} DCA", [benchmark], None),
     ]
+    # A strategy that deliberately holds cash-like assets cannot be read
+    # against an all-equity curve - 20% in short-term Treasuries gives up
+    # about a fifth of the equity return by construction, and scoring that as
+    # a strategy failure is the warm-up mistake wearing a different hat. The
+    # blend below is the same shape with no ranking inside it, which is the
+    # only curve that isolates what the ranking is worth.
+    blend, safe_share = _safe_blend(strategy, history)
+    if blend:
+        rows.append(
+            (
+                f"같은 배분 균등 DCA (안전 {safe_share:.0%}/주식 {1 - safe_share:.0%})",
+                sorted(history),
+                blend,
+            )
+        )
     print()
     print("--- 전략을 안 썼다면 (같은 기간·같은 적립) ---")
-    for label, symbols in rows:
+    for label, symbols, weights in rows:
         stats = summarize_curve(
             dca_curve(
                 history,
@@ -144,6 +183,7 @@ def _print_comparison(result, history, backtest_config, benchmark, fx_history=No
                 backtest_config.contribution,
                 backtest_config.initial_krw,
                 fx_rate,
+                weights=weights,
             )
         )
         twr = f"{stats['twr_cagr']:.2%}" if stats["twr_cagr"] is not None else "계산 불가"
@@ -234,7 +274,9 @@ def run(argv=None):
     _print_report("전체 구간", result)
 
     if not args.no_compare:
-        _print_comparison(result, history, backtest_config, benchmark, fx_history)
+        _print_comparison(
+            result, history, backtest_config, benchmark, fx_history, strategy
+        )
 
     if args.split:
         split_day = date.fromisoformat(args.split)

@@ -224,3 +224,58 @@ def test_trade_from_after_every_bar_is_an_error_not_an_empty_run():
     config = BacktestConfig(trade_from=START + timedelta(days=365))
     with pytest.raises(ValueError):
         Backtester(NullStrategy(), history, config).run()
+
+
+# --------------------------------------------------------------------- tax
+
+
+def test_a_year_of_realised_gain_is_taxed_the_following_year():
+    from src.backtest.tax import CapitalGainsTax, RealisedGainLedger
+
+    ledger = RealisedGainLedger(CapitalGainsTax(rate=D("0.22"), deduction_krw=D("0")))
+    ledger.record(date(2025, 6, 1), D("100"), D("1000"))  # 100,000 KRW gain
+
+    assert ledger.due_on(date(2025, 12, 31)) == D("0")  # year not over
+    assert ledger.due_on(date(2026, 1, 2)) == D("22000")
+    assert ledger.due_on(date(2026, 1, 3)) == D("0")  # settled once, not yearly
+
+
+def test_the_basic_deduction_shelters_a_small_gain_entirely():
+    from src.backtest.tax import CapitalGainsTax
+
+    tax = CapitalGainsTax(rate=D("0.22"), deduction_krw=D("2500000"))
+    assert tax.bill_krw(D("2000000")) == D("0")
+    assert tax.bill_krw(D("3000000")) == D("110000")  # (3.0M - 2.5M) * 0.22
+
+
+def test_a_losing_year_owes_nothing_and_is_not_carried_forward():
+    from src.backtest.tax import CapitalGainsTax, RealisedGainLedger
+
+    ledger = RealisedGainLedger(CapitalGainsTax(deduction_krw=D("0")))
+    ledger.record(date(2025, 6, 1), D("-100"), D("1000"))
+    ledger.record(date(2026, 6, 1), D("100"), D("1000"))
+
+    assert ledger.due_on(date(2026, 1, 2)) == D("0")  # the loss year owes nothing
+    # ...and does not shelter the next year's gain.
+    assert ledger.due_on(date(2027, 1, 4)) == D("22000")
+
+
+def test_losses_and_gains_inside_one_year_are_netted():
+    from src.backtest.tax import CapitalGainsTax, RealisedGainLedger
+
+    ledger = RealisedGainLedger(CapitalGainsTax(rate=D("0.22"), deduction_krw=D("0")))
+    ledger.record(date(2025, 3, 1), D("300"), D("1000"))
+    ledger.record(date(2025, 9, 1), D("-100"), D("1000"))
+
+    assert ledger.due_on(date(2026, 1, 2)) == D("44000")  # (300-100)*1000*0.22
+
+
+def test_gains_are_converted_at_the_rate_on_the_day_of_the_sale():
+    """The tax is assessed in KRW, so a decade of FX drift is not part of it."""
+    from src.backtest.tax import CapitalGainsTax, RealisedGainLedger
+
+    ledger = RealisedGainLedger(CapitalGainsTax(rate=D("0.22"), deduction_krw=D("0")))
+    ledger.record(date(2025, 3, 1), D("100"), D("1000"))
+    ledger.record(date(2025, 9, 1), D("100"), D("2000"))
+
+    assert ledger.due_on(date(2026, 1, 2)) == D("66000")  # (100k + 200k) * 0.22

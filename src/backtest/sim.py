@@ -108,6 +108,17 @@ class SimPortfolio:
             else:
                 self.lots[symbol] = Lot(remaining, lot.avg_price)
 
+    def withdraw(self, amount_krw, fx_rate):
+        """Take KRW out of the account - a tax bill, not a trade.
+
+        Cash can go negative here rather than being clamped: an account that
+        owed more tax than it held would really be short, and hiding that
+        behind a floor would make the backtest quietly kinder than reality.
+        """
+        if not fx_rate:
+            return
+        self.cash_usd -= amount_krw / fx_rate
+
     def contribute(self, amount_krw, fx_rate):
         """Convert a KRW deposit to USD cash at the day's rate."""
         if not fx_rate:

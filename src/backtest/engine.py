@@ -22,6 +22,7 @@ from src.backtest.context import build_backtest_context
 from src.backtest.fills import ContributionSchedule, FillModel
 from src.backtest.metrics import BacktestResult, EquityPoint, summarize
 from src.backtest.sim import SimPortfolio
+from src.backtest.tax import RealisedGainLedger
 from src.execution.risk import RiskGate, RiskLimits
 from src.models import ZERO
 
@@ -49,6 +50,12 @@ class BacktestConfig:
     #: excellent purely by holding cash through 2022, and a 2020 start looked
     #: poor purely by holding cash through the recovery.
     trade_from: object = None
+    #: Korean capital-gains tax on realised overseas-stock gains. Left on by
+    #: default: a strategy that rotates realises gains by design, and every
+    #: knob that changes turnover changes this bill, so comparing them with
+    #: tax at zero would rank them on a cost the account cannot skip. Pass
+    #: ``CapitalGainsTax(enabled=False)`` to see the pre-tax figure.
+    tax: object = None
 
 
 class Backtester:
@@ -82,6 +89,7 @@ class Backtester:
         universe_symbols = tuple(self.history.keys())
 
         sim = SimPortfolio(cash_usd=ZERO)
+        ledger = RealisedGainLedger(self.config.tax)
         # The initial seed is contributed on day one like any other deposit,
         # so it flows through the same FX conversion and the same equity
         # curve accounting as every later contribution.
@@ -118,8 +126,19 @@ class Backtester:
                     quantity = intent.quantity
                 notional = quantity * price
                 commission = self.config.fills.commission(notional)
+                before = len(sim.trades)
                 sim.apply_fill(day, intent.symbol, intent.side, quantity, price, commission, mode)
+                for trade in sim.trades[before:]:
+                    ledger.record(day, trade.pnl_usd, self._fx_rate(day))
             pending = still_pending
+
+            # Last year's bill, settled once, on the first session of the new
+            # year. Charged in cash, so it competes with everything else the
+            # strategy wanted to do with that money - which is exactly how it
+            # behaves in the account.
+            owed_krw = ledger.due_on(day)
+            if owed_krw > ZERO:
+                sim.withdraw(owed_krw, self._fx_rate(day))
 
             # 2. Contribution.
             fx_rate = self._fx_rate(day)
@@ -183,6 +202,7 @@ class Backtester:
                     pending.append((decision.intent, mode))
 
         result_metrics = summarize(equity_curve, sim.trades, decisions, contributions)
+        result_metrics["tax_paid_krw"] = ledger.total_paid_krw
         return BacktestResult(
             equity_curve=tuple(equity_curve),
             trades=tuple(sim.trades),
