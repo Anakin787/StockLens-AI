@@ -98,6 +98,17 @@ class BucketDcaParams:
     #: strategy that acted on every crossing would pay commission and capital
     #: gains tax for the privilege of buying the same name back.
     rotation_buffer: int = 2
+    #: Turn rotation off entirely. The leverage trend-exit still runs - that
+    #: is a risk control, not a rotation - so this is "never sell to change
+    #: my mind", not "never sell".
+    #:
+    #: A large ``rotation_buffer`` does *not* do this. Past the length of the
+    #: ranking the buffer stops mattering, and the keep-list becomes every
+    #: ranked name - which is exactly what ``require_absolute_exit`` already
+    #: computes. The two settings then produce identical runs, which is how
+    #: this flag came to exist: a lab row labelled "매도 안 함" matched the
+    #: absolute-exit row to the last decimal because it *was* that row.
+    rotation_enabled: bool = True
     #: Sell only when the holding itself has stopped qualifying - not when
     #: it merely slipped down the ranking. See ``_rotation_exits``.
     require_absolute_exit: bool = True
@@ -297,6 +308,7 @@ class BucketDcaParams:
 BucketDcaParams._FIELDS = {
     "rotation_buffer": int,
     "require_absolute_exit": bool,
+    "rotation_enabled": bool,
     "prefer_incumbents": bool,
     "weight_mode": str,
     "unfilled_weight_to": str,
@@ -509,6 +521,8 @@ class BucketDcaStrategy(MomentumDcaStrategy):
         SAFE is never rotated out either way. It is not ranked, and the weeks
         it looks worst are the weeks it is doing its job.
         """
+        if not p.rotation_enabled:
+            return
         slots = p.slots
         for bucket, rows in ranked.items():
             if bucket == BUCKET_SAFE:

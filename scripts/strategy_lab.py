@@ -50,7 +50,9 @@ INITIAL_KRW = 1_000_000
 #: of one market, not four independent samples - which is why every table
 #: below reports all of them rather than the flattering one.
 STARTS = {
+    "2014": date(2014, 1, 2),
     "2016": date(2016, 1, 4),
+    "2018": date(2018, 1, 2),
     "2020": date(2020, 1, 2),
     "2022": date(2022, 1, 3),
 }
@@ -249,7 +251,7 @@ def build_groups():
             ("순위 기반 (buffer 8)", base_params(require_absolute_exit=False, rotation_buffer=8)),
             ("절대 조건 (현재 기본)", base_params()),
             ("절대 + 추세 이탈 동시", base_params(exit_requires_trend_break=True)),
-            ("매도 안 함", base_params(rotation_buffer=999, require_absolute_exit=False)),
+            ("교체 매도 끔 (추세이탈 매도만)", base_params(rotation_enabled=False)),
         ],
     ))
 
@@ -346,6 +348,113 @@ def build_groups():
         ],
     ))
 
+    groups.append((
+        "11. 절대 모멘텀 문턱 (min_score)",
+        "'수익률이 이보다 낮으면 아예 사지 않는다'의 경계. 실질적인 하방 방어 "
+        "두 가지 중 하나입니다(다른 하나는 추세 이탈 매도).",
+        [
+            ("0 — 상승 중이면 다 후보 (현재)", base_params()),
+            ("0.05", base_params(min_score=D("0.05"))),
+            ("0.15", base_params(min_score=D("0.15"))),
+            ("0.30", base_params(min_score=D("0.30"))),
+        ],
+    ))
+
+    groups.append((
+        "12. 추세 필터 기간 (trend_sma)",
+        "레버리지 상품을 사고 파는 기준선. 200일은 관습적인 값이고 검증된 적은 없습니다.",
+        [
+            ("100일", base_params(trend_sma=100)),
+            ("150일", base_params(trend_sma=150)),
+            ("200일 (현재)", base_params()),
+            ("250일", base_params(trend_sma=250)),
+        ],
+    ))
+
+    groups.append((
+        "13. 현금 유보 (cash_reserve)",
+        "매수 여력 중 남겨두는 몫. 남겨둔 만큼은 투자되지 않습니다.",
+        [
+            ("0%", base_params(cash_reserve=D("0"))),
+            ("5% (현재)", base_params()),
+            ("10%", base_params(cash_reserve=D("0.10"))),
+            ("20%", base_params(cash_reserve=D("0.20"))),
+        ],
+    ))
+
+    groups.append((
+        "14. 못 채운 버킷의 몫을 어디로",
+        "GROWTH는 종목이 부족해 슬롯이 빕니다. 그 몫을 어느 버킷이 가져가는가.",
+        [
+            ("CORE로 (현재)", base_params()),
+            ("SAFE로", base_params(unfilled_weight_to=BUCKET_SAFE)),
+            ("GROWTH 슬롯을 1개로 줄임", base_params(bucket_slots=slots(growth=1))),
+        ],
+    ))
+
+    return groups
+
+
+def build_round_two(best=None):
+    """Combinations and robustness, run once the one-factor tables are in.
+
+    Single-factor tables say which knob helps on its own; they do not say
+    whether two that help separately still help together. The first build
+    here found exactly that trap - incumbency and flow each looked fine and
+    were worse combined - so the promising settings get run as combinations
+    rather than assumed to add up.
+    """
+    best = best or {}
+    groups = []
+
+    groups.append((
+        "11. 유력 조합",
+        "1~10에서 각각 좋았던 설정을 함께 걸었을 때. 따로 좋은 것이 같이도 좋다는 "
+        "보장은 없습니다 — 슬롯 점유와 flow가 각각은 괜찮았지만 합치면 나빴던 전례가 "
+        "있습니다.",
+        [
+            ("기본값 (현재 코드)", base_params()),
+            ("보수: 점유 + 절대매도 + 상한 5%", base_params(
+                prefer_incumbents=True, require_absolute_exit=True,
+                max_deploy_per_week_pct=D("0.05"))),
+            ("적극: 점유없음 + 상한 20%", base_params(
+                prefer_incumbents=False, max_deploy_per_week_pct=D("0.20"))),
+            ("저회전: 점유 + 마진50% + 추세이탈 동시", base_params(
+                prefer_incumbents=True, incumbent_margin=D("0.50"),
+                exit_requires_trend_break=True)),
+            ("무매도: 점유 + 교체 매도 끔", base_params(
+                prefer_incumbents=True, rotation_enabled=False)),
+            ("집중: CORE 3슬롯 + 점유", base_params(
+                bucket_slots=slots(core=3), prefer_incumbents=True)),
+            ("분산: CORE 10슬롯 + 점유", base_params(
+                bucket_slots=slots(core=10), prefer_incumbents=True)),
+        ],
+    ))
+
+    groups.append((
+        "12. 세금을 뺀 같은 표",
+        "회전이 많은 설정일수록 세금이 성과를 갉아먹습니다. 세전/세후를 나란히 보면 "
+        "그 설정이 실제로 무엇을 벌었는지 분리됩니다.",
+        [
+            ("기본값", base_params()),
+            ("점유 없음 (회전 많음)", base_params(prefer_incumbents=False)),
+            ("순위 매도 (회전 가장 많음)", base_params(require_absolute_exit=False)),
+            ("교체 매도 끔 (회전 0)", base_params(rotation_enabled=False)),
+        ],
+    ))
+
+    groups.append((
+        "13. 기존 전략과 나란히",
+        "momentum-dca(집중·무매도)와 bucket-dca(분산·안전자산)의 직접 비교. "
+        "같은 창, 같은 적립, 같은 환율.",
+        [
+            ("momentum-dca (기존)", MomentumDcaStrategy()),
+            ("bucket-dca (신규 기본값)", base_params()),
+            ("bucket-dca 안전 0%", base_params(
+                bucket_weights=weights("0", "0.80", "0.20"), bucket_slots=slots(safe=0))),
+        ],
+    ))
+
     return groups
 
 
@@ -394,18 +503,61 @@ def run_group(lab, title, why, cases, starts, tax=True):
         )
 
 
+def write_benchmarks(lab, starts):
+    """The no-strategy curves, printed once, above everything else.
+
+    A table of strategy variants with no baseline on the page invites reading
+    the best row as good. In this window simply buying the universe returned
+    about 29% a year, so most of what any row shows is the decade, not the
+    rule being tested.
+    """
+    lab.write("")
+    lab.write("### 0. 기준선 — 전략을 안 썼다면")
+    lab.write("")
+    lab.write(
+        "아래 모든 표는 이 숫자들과 비교해서 읽어야 합니다. "
+        "**같은 배분 균등 DCA**가 진짜 비교 대상입니다 — 안전자산 비중까지 "
+        "전략과 똑같이 맞춘 무전략 곡선입니다."
+    )
+    lab.write("")
+    header = "| 기준선 | " + " | ".join(
+        f"{name} TWR | {name} MDD" for name in starts
+    ) + " |"
+    lab.write(header)
+    lab.write("|---|" + "---|" * (len(starts) * 2))
+
+    labels = None
+    rows = {}
+    for name, start in starts.items():
+        stats = lab.benchmarks(start)
+        if labels is None:
+            labels = [k for k, v in stats.items() if v is not None]
+        for label in labels:
+            rows.setdefault(label, []).extend(
+                [_fmt_pct(stats[label]["twr_cagr"]), _fmt_pct(stats[label]["mdd"])]
+            )
+    for label in labels or []:
+        lab.write(f"| {label} | " + " | ".join(rows[label]) + " |")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="전략 비교 실험실")
     parser.add_argument("--out", default="docs/STRATEGY_LAB.md")
     parser.add_argument("--group", default=None, help="번호 또는 제목 일부")
-    parser.add_argument("--starts", default="2016,2020,2022")
+    parser.add_argument("--starts", default="2014,2016,2018,2020,2022")
     parser.add_argument("--no-tax", action="store_true")
+    parser.add_argument(
+        "--round-two", action="store_true", help="조합·강건성 묶음만 돌립니다"
+    )
     args = parser.parse_args(argv)
 
     starts = {k: STARTS[k] for k in args.starts.split(",") if k in STARTS}
     lab = Lab(args.out)
 
-    groups = build_groups()
+    if not args.group:
+        write_benchmarks(lab, starts)
+
+    groups = build_round_two() if args.round_two else build_groups()
     if args.group:
         groups = [g for g in groups if args.group in g[0]]
 

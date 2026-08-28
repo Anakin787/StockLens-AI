@@ -99,6 +99,20 @@ class PriceHistory:
                 )
             previous = bar.date
 
+    @classmethod
+    def _prefix(cls, symbol, bars):
+        """A history built from bars already known to be ordered.
+
+        ``as_of`` slices a validated history, so re-walking the slice to
+        check the ordering it inherited is pure cost - and it is paid once
+        per symbol per session, which in a ten-year backtest over forty names
+        is a hundred million date comparisons that can only ever pass.
+        """
+        history = object.__new__(cls)
+        object.__setattr__(history, "symbol", symbol)
+        object.__setattr__(history, "bars", bars)
+        return history
+
     def __len__(self):
         return len(self.bars)
 
@@ -110,11 +124,25 @@ class PriceHistory:
 
     @property
     def dates(self):
-        return tuple(bar.date for bar in self.bars)
+        """Bar dates, oldest first. Built once and kept.
+
+        This is read on every ``as_of`` and every staleness check, so
+        rebuilding the tuple each time made the cost of looking at a history
+        proportional to its length - the backtest's single largest expense.
+        The object is immutable, so the answer cannot go stale.
+        """
+        cached = getattr(self, "_dates", None)
+        if cached is None:
+            cached = tuple(bar.date for bar in self.bars)
+            object.__setattr__(self, "_dates", cached)
+        return cached
 
     def closes(self, n=None):
         """Adjusted closes, oldest first. ``n`` takes the most recent n."""
-        values = tuple(bar.close for bar in self.bars)
+        values = getattr(self, "_closes", None)
+        if values is None:
+            values = tuple(bar.close for bar in self.bars)
+            object.__setattr__(self, "_closes", values)
         if n is None:
             return values
         return values[-n:] if n > 0 else ()
@@ -138,7 +166,7 @@ class PriceHistory:
         index = bisect_right(self.dates, cutoff)
         if index == len(self.bars):
             return self
-        return PriceHistory(self.symbol, self.bars[:index])
+        return PriceHistory._prefix(self.symbol, self.bars[:index])
 
     def is_stale(self, now, max_age_days=5):
         """True when the last bar is too old to trade on.

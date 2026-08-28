@@ -298,3 +298,39 @@ def test_an_unfillable_bucket_hands_its_weight_over_rather_than_holding_cash():
     safe_usd = sum((s.amount for s in safe), D("0"))
     # CORE now carries 0.6 + 0.2 = 0.8 against SAFE's 0.2.
     assert core_usd > safe_usd * 3
+
+
+def test_a_large_buffer_is_not_a_way_to_turn_rotation_off():
+    """Past the length of the ranking the buffer stops meaning anything.
+
+    The keep-list becomes every ranked name, which is what the absolute-exit
+    rule already computes - so the two settings produce identical runs. A lab
+    row labelled "no selling" once matched the absolute-exit row to the last
+    decimal for exactly this reason.
+    """
+    history = history_for({"AAA": "0.03", "BBB": "0.02", "CCC": "0.01", "DDD": "-0.02"})
+    ctx = context(datetime(2025, 3, 3, 10), history, positions=[position("DDD", quantity="10")])
+
+    huge_buffer = strategy(
+        BucketDcaParams(
+            **{f.name: getattr(SMALL, f.name) for f in SMALL.__dataclass_fields__.values()}
+            | {"rotation_buffer": 999, "require_absolute_exit": False}
+        )
+    )
+    absolute = strategy()
+
+    sold_by_buffer = {s.symbol for s in huge_buffer.evaluate(ctx) if s.side == SIDE_SELL}
+    sold_by_absolute = {s.symbol for s in absolute.evaluate(ctx) if s.side == SIDE_SELL}
+    assert sold_by_buffer == sold_by_absolute == {"DDD"}
+
+
+def test_rotation_can_actually_be_turned_off():
+    history = history_for({"AAA": "0.03", "BBB": "0.02", "CCC": "0.01", "DDD": "-0.02"})
+    ctx = context(datetime(2025, 3, 3, 10), history, positions=[position("DDD", quantity="10")])
+    off = strategy(
+        BucketDcaParams(
+            **{f.name: getattr(SMALL, f.name) for f in SMALL.__dataclass_fields__.values()}
+            | {"rotation_enabled": False}
+        )
+    )
+    assert not [s for s in off.evaluate(ctx) if s.side == SIDE_SELL]
