@@ -408,7 +408,7 @@ def build_round_two(best=None):
     groups = []
 
     groups.append((
-        "11. 유력 조합",
+        "15. 유력 조합",
         "1~10에서 각각 좋았던 설정을 함께 걸었을 때. 따로 좋은 것이 같이도 좋다는 "
         "보장은 없습니다 — 슬롯 점유와 flow가 각각은 괜찮았지만 합치면 나빴던 전례가 "
         "있습니다.",
@@ -432,7 +432,7 @@ def build_round_two(best=None):
     ))
 
     groups.append((
-        "12. 세금을 뺀 같은 표",
+        "16. 세금을 뺀 같은 표",
         "회전이 많은 설정일수록 세금이 성과를 갉아먹습니다. 세전/세후를 나란히 보면 "
         "그 설정이 실제로 무엇을 벌었는지 분리됩니다.",
         [
@@ -444,7 +444,7 @@ def build_round_two(best=None):
     ))
 
     groups.append((
-        "13. 기존 전략과 나란히",
+        "17. 기존 전략과 나란히",
         "momentum-dca(집중·무매도)와 bucket-dca(분산·안전자산)의 직접 비교. "
         "같은 창, 같은 적립, 같은 환율.",
         [
@@ -458,10 +458,84 @@ def build_round_two(best=None):
     return groups
 
 
+def build_round_three():
+    """Everything the first two rounds pointed at, tried together.
+
+    The single-factor tables each hold one knob against the same default. Two
+    of them moved a lot on their own - unfilled GROWTH weight going to SAFE
+    rather than CORE, and turning volatility adjustment off - and neither has
+    been seen next to the other.
+    """
+    groups = []
+
+    conservative = dict(
+        exit_requires_trend_break=True,
+        unfilled_weight_to=BUCKET_SAFE,
+        trend_sma=150,
+    )
+
+    groups.append((
+        "18. 3차: 방어 조합",
+        "낙폭을 낮추는 쪽으로 좋았던 설정들을 함께. 추세이탈 동시 조건 + 못 채운 "
+        "몫을 SAFE로 + 추세필터 150일.",
+        [
+            ("기본값", base_params()),
+            ("추세이탈 동시 조건만", base_params(exit_requires_trend_break=True)),
+            ("못 채운 몫 SAFE로만", base_params(unfilled_weight_to=BUCKET_SAFE)),
+            ("추세필터 150일만", base_params(trend_sma=150)),
+            ("셋 다", base_params(**conservative)),
+            ("셋 다 + 안전 30%", base_params(
+                **conservative, bucket_weights=weights("0.30", "0.50", "0.20"))),
+        ],
+    ))
+
+    groups.append((
+        "19. 3차: 공격 조합 (변동성 조정 끔)",
+        "수익이 가장 크게 오른 설정. 낙폭이 얼마나 따라 오르는지, 그리고 방어 "
+        "설정으로 그걸 되돌릴 수 있는지.",
+        [
+            ("변동성 조정 끔만", base_params(vol_adjust=False)),
+            ("끔 + 추세이탈 동시", base_params(vol_adjust=False, exit_requires_trend_break=True)),
+            ("끔 + 방어 조합 셋", base_params(vol_adjust=False, **conservative)),
+            ("끔 + 방어 셋 + 안전 30%", base_params(
+                vol_adjust=False, **conservative,
+                bucket_weights=weights("0.30", "0.50", "0.20"))),
+            ("끔 + 방어 셋 + 안전 40%", base_params(
+                vol_adjust=False, **conservative,
+                bucket_weights=weights("0.40", "0.40", "0.20"))),
+            ("끔 + CORE 10슬롯", base_params(vol_adjust=False, bucket_slots=slots(core=10))),
+        ],
+    ))
+
+    groups.append((
+        "20. 3차: 교체 마진 재측정",
+        "3번 표의 마진 행들은 자리를 뺏긴 종목을 팔지 않던 버그 상태에서 쟀습니다. "
+        "커밋 b4e767c 이후 다시 잽니다.",
+        [
+            ("점유 (교체 불가)", base_params()),
+            ("점유 + 마진 10%", base_params(incumbent_margin=D("0.10"))),
+            ("점유 + 마진 25%", base_params(incumbent_margin=D("0.25"))),
+            ("점유 + 마진 50%", base_params(incumbent_margin=D("0.50"))),
+            ("점유 + 마진 100%", base_params(incumbent_margin=D("1.00"))),
+        ],
+    ))
+
+    return groups
+
+
 # ----------------------------------------------------------------- report
 
 
 def run_group(lab, title, why, cases, starts, tax=True):
+    """One table. ``tax`` may be overridden per group via a title marker.
+
+    A group titled "세금을 뺀" that still charges tax is worse than no group
+    at all - it invites the reader to compare two identical columns and
+    conclude tax costs nothing. The marker keeps the intent and the run in
+    the same place.
+    """
+    if "세금을 뺀" in title:
+        tax = False
     lab.write("")
     lab.write(f"### {title}")
     lab.write("")
@@ -549,6 +623,9 @@ def main(argv=None):
     parser.add_argument(
         "--round-two", action="store_true", help="조합·강건성 묶음만 돌립니다"
     )
+    parser.add_argument(
+        "--round-three", action="store_true", help="3차 조합 묶음만 돌립니다"
+    )
     args = parser.parse_args(argv)
 
     starts = {k: STARTS[k] for k in args.starts.split(",") if k in STARTS}
@@ -557,7 +634,12 @@ def main(argv=None):
     if not args.group:
         write_benchmarks(lab, starts)
 
-    groups = build_round_two() if args.round_two else build_groups()
+    if args.round_three:
+        groups = build_round_three()
+    elif args.round_two:
+        groups = build_round_two()
+    else:
+        groups = build_groups()
     if args.group:
         groups = [g for g in groups if args.group in g[0]]
 
