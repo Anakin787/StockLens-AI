@@ -71,8 +71,31 @@ function showError(detail) {
 
 /* ------------------------------------------------------------ navigation */
 
-function setView(view) {
+// The hash is the address of the page. Clicking a nav item used to change
+// only the in-memory view, which meant a refresh - or a copied link - had no
+// hash to read and always landed on Overview, whatever you were looking at.
+function knownView(view) {
+  return document.querySelector(`.nav-item[data-view="${view}"]`) ? view : "overview";
+}
+
+function currentHashView() {
+  return knownView(decodeURIComponent(location.hash.slice(1)) || "overview");
+}
+
+function setView(requested) {
+  const view = knownView(requested);
   state.view = view;
+  const raw = decodeURIComponent(location.hash.slice(1));
+  if (raw !== view) {
+    // Moving between pages pushes a history entry so Back works. Correcting
+    // an empty or unrecognised hash rewrites in place instead - Back should
+    // not walk into an address that never named a page.
+    // Either way the write re-enters through hashchange, where the view
+    // already matches and the second pass stops here.
+    if (raw && knownView(raw) === raw) location.hash = view;
+    else if (window.history?.replaceState) history.replaceState(null, "", "#" + view);
+    else location.hash = view;
+  }
   document.querySelectorAll("section[data-view]").forEach((section) => {
     section.hidden = section.dataset.view !== view;
   });
@@ -883,12 +906,12 @@ function init() {
   });
   // Changing the hash is a same-document navigation, so deep links only work
   // if we listen for it.
-  window.addEventListener("hashchange", () => setView(location.hash.slice(1) || "overview"));
+  window.addEventListener("hashchange", () => setView(currentHashView()));
 
   styleRangeButtons();
   styleAllocTabs();
   styleAuditTabs();
-  setView(location.hash.slice(1) || "overview");
+  setView(currentHashView());
 
   const refresh = () => {
     loadOverview().catch((err) => showError(String(err)));
