@@ -35,7 +35,7 @@ from decimal import ROUND_DOWN, Decimal
 from src.models import ZERO
 from src.strategy.base import ORDER_MARKET, SIDE_BUY, SIDE_SELL, Signal, Strategy
 from src.strategy.indicators import drawdown_from_high, realized_vol, sma, total_return
-from src.strategy.universe import DEFAULT_UNIVERSE, parse_universe
+from src.strategy.universe import BUCKET_SAFE, DEFAULT_UNIVERSE, parse_universe
 from src.toss.errors import TossConfigError
 
 ONE = Decimal("1")
@@ -522,6 +522,17 @@ class MomentumDcaStrategy(Strategy):
         allow_leverage = self._leverage_allowed(ctx, trend_up, p)
         ranked = []
         for instrument in self.universe.tradable(allow_leverage=True):
+            if instrument.bucket == BUCKET_SAFE:
+                # This strategy has no notion of holding something to a
+                # target weight, so a safe asset can only reach it as a
+                # ranked candidate - and momentum ranks an asset held for
+                # how it behaves when equities fall in exactly the weeks it
+                # is doing its job. Before the universe grew a SAFE bucket
+                # there was nothing here to skip; skipping it keeps this
+                # strategy behaving as it did, rather than quietly acquiring
+                # a taste for Treasuries because a different strategy needed
+                # them in the list.
+                continue
             if instrument.is_leveraged and not allow_leverage:
                 continue
             history = ctx.bars(instrument.symbol)
@@ -609,7 +620,7 @@ class MomentumDcaStrategy(Strategy):
         already = {instrument.symbol for instrument, _, _ in allocations}
         if remaining_weight > ZERO and p.fallback_symbol not in already:
             fallback = self.universe.get(p.fallback_symbol)
-            if fallback is not None:
+            if fallback is not None and fallback.bucket != BUCKET_SAFE:
                 allow_leverage = self._leverage_allowed(ctx, trend_up, p)
                 if not fallback.is_leveraged or allow_leverage:
                     history = ctx.bars(fallback.symbol)

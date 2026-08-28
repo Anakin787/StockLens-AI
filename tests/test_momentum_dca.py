@@ -622,3 +622,38 @@ def test_the_day_after_an_open_rebalance_day_does_not_buy_again():
     signals = strategy().evaluate(context(datetime(2026, 9, 1, 9, 0), history))
 
     assert [s for s in signals if s.side == SIDE_BUY] == []
+
+
+def test_the_safe_bucket_is_not_a_momentum_candidate():
+    """Adding safe assets for a different strategy must not change this one.
+
+    momentum-dca has no notion of holding something to a target weight, so a
+    safe asset can only reach it as a ranked candidate - and ranking an asset
+    held for how it behaves when equities fall would buy and sell it on
+    exactly the wrong weeks. Before the universe grew a SAFE bucket there was
+    nothing here to skip.
+    """
+    from src.strategy.universe import BUCKET_SAFE, KIND_INDEX_ETF
+
+    universe = Universe(
+        (
+            Instrument("QQQ", "Bench", kind=KIND_INDEX_ETF, max_weight=D("0.9")),
+            Instrument("HOT", "Hot", kind=KIND_STOCK, max_weight=D("0.9")),
+            Instrument(
+                "SHY", "Treasuries", kind=KIND_INDEX_ETF,
+                bucket=BUCKET_SAFE, max_weight=D("0.9"),
+            ),
+        )
+    )
+    # SHY has the strongest trend of the three, so a strategy that ranked it
+    # would put this week's money there.
+    history = {
+        "QQQ": trending("QQQ", 41, "0.001"),
+        "HOT": trending("HOT", 41, "0.004"),
+        "SHY": trending("SHY", 41, "0.02"),
+    }
+    strategy = MomentumDcaStrategy(universe=universe, params=SMALL_PARAMS)
+    signals = strategy.evaluate(context(datetime(2025, 3, 3, 10), history))
+
+    assert "SHY" not in {s.symbol for s in signals}
+    assert signals, "the other names should still be bought"
