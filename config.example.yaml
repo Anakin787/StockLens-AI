@@ -188,7 +188,7 @@ trading:
   # 검증하지 않습니다 — 알 수 없는 키를 거부하는 건 각 전략의 from_config 몫.
   strategy_params: {}
   # top_n: 2
-  # rebalance_weekday: 0        # 0=월요일
+  # rebalance_weekday: 0        # 0=월요일. 그날이 휴장이면 그 주의 첫 거래일에 매수한다
   # dislocation_drawdown: 0.08
   # cash_reserve: 0.05
 

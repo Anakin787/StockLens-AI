@@ -28,7 +28,8 @@ benefit. A 2x position's decay is what the trend filter exists to avoid.
 """
 
 from dataclasses import dataclass
-from datetime import date as date_type
+from bisect import bisect_left
+from datetime import date as date_type, timedelta
 from decimal import ROUND_DOWN, Decimal
 
 from src.models import ZERO
@@ -320,7 +321,7 @@ class MomentumDcaStrategy(Strategy):
 
         signals = list(self._exit_signals(ctx, today, trend_up))
 
-        mode = self._mode(ctx, today, trend_up, bench_closes, p)
+        mode = self._mode(ctx, today, benchmark_history, trend_up, bench_closes, p)
         if mode is None:
             return signals
 
@@ -411,15 +412,49 @@ class MomentumDcaStrategy(Strategy):
 
     # --------------------------------------------------------------- mode
 
-    def _mode(self, ctx, today, trend_up, bench_closes, p):
-        weekday = today.weekday() if isinstance(today, date_type) else ctx.now.weekday()
-        if weekday == p.rebalance_weekday:
+    def _mode(self, ctx, today, benchmark_history, trend_up, bench_closes, p):
+        if self._is_rebalance_session(ctx, today, benchmark_history, p):
             return MODE_WEEKLY
         if p.dislocation_enabled and self._dislocation_fires(
             ctx, today, trend_up, bench_closes, p
         ):
             return MODE_DISLOCATION
         return None
+
+    def _is_rebalance_session(self, ctx, today, benchmark_history, p):
+        """True when this session is the week's buying day.
+
+        The rhythm is anchored to a weekday, but exchanges take holidays and
+        a weekday comparison alone drops those weeks in silence - US Labor Day
+        is a Monday, so a Monday cadence simply does not buy that week and
+        nothing anywhere says why. The rule is therefore *the rebalance
+        weekday, or the first session after it*: the week still gets its one
+        buy, one session late.
+
+        The benchmark's own bars are the trading calendar. They are the same
+        series every other date decision here is made from, they already
+        exclude holidays by construction, and they need no separate calendar
+        feed that could disagree with the prices being traded on.
+        """
+        if not isinstance(today, date_type):
+            # No session date to reason about; fall back to the wall clock,
+            # which is what this did before the calendar was consulted.
+            return ctx.now.weekday() == p.rebalance_weekday
+
+        # This week's rebalance weekday, on or before today.
+        anchor = today - timedelta(days=(today.weekday() - p.rebalance_weekday) % 7)
+        if today == anchor:
+            return True
+
+        sessions = benchmark_history.dates if benchmark_history is not None else ()
+        index = bisect_left(sessions, anchor)
+        if index >= len(sessions):
+            # The anchor is past every bar we hold. Nothing to defer to, and
+            # claiming this session is the make-up day would be a guess.
+            return False
+        # Only the *first* session on or after the anchor is the make-up day.
+        # Later ones in the same week already had theirs.
+        return sessions[index] == today
 
     def _dislocation_fires(self, ctx, today, trend_up, bench_closes, p):
         if not bench_closes:

@@ -537,3 +537,88 @@ def test_from_config_accepts_a_universe_with_a_matching_override():
     )
     s = MomentumDcaStrategy.from_config(trading_config)
     assert s.universe["QQQ"].max_weight == D("0.60")
+
+
+# ------------------------------------------------- holidays on the rebalance day
+
+#: US Labor Day 2026 - a Monday the exchange is shut, which is exactly the
+#: case a plain weekday comparison drops in silence.
+LABOR_DAY = date(2026, 9, 7)
+
+
+def sessions_between(start, end, holidays=(LABOR_DAY,)):
+    """Weekdays from start to end inclusive, minus the given holidays."""
+    days, day = [], start
+    while day <= end:
+        if day.weekday() < 5 and day not in holidays:
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
+def on_sessions(symbol, days, daily_return, start_price=100):
+    """A trending series that exists only on real trading days."""
+    rate = D(str(daily_return))
+    price = D(str(start_price))
+    bars = []
+    for day in days:
+        bars.append(Bar(date=day, open=price, high=price, low=price, close=price))
+        price = price * (D("1") + rate)
+    return PriceHistory(symbol, tuple(bars))
+
+
+def calendar_history(end):
+    days = sessions_between(date(2026, 7, 1), end)
+    return {
+        "QQQ": on_sessions("QQQ", days, "0.001", start_price=100),
+        "AAA": on_sessions("AAA", days, "0.02", start_price=50),
+        "BBB": on_sessions("BBB", days, "0.005", start_price=50),
+    }
+
+
+def test_a_closed_rebalance_day_buys_on_the_next_session():
+    """The week still gets its buy when the exchange is shut on its weekday.
+
+    Comparing weekdays alone would skip this week entirely and say nothing
+    about it - the run would simply produce no signals, which is what a quiet
+    market looks like too.
+    """
+    history = calendar_history(date(2026, 9, 8))  # Tuesday after Labor Day
+    last = history["QQQ"].last_date
+    assert last == date(2026, 9, 8) and last.weekday() == 1
+
+    signals = strategy().evaluate(context(datetime(2026, 9, 8, 9, 0), history))
+
+    assert [s.symbol for s in signals if s.side == SIDE_BUY]
+
+
+def test_the_make_up_session_happens_once():
+    """Only the first session after the closed weekday counts.
+
+    Otherwise every remaining day of that week reads as the rebalance day and
+    the week buys three or four times.
+    """
+    history = calendar_history(date(2026, 9, 9))  # Wednesday
+    assert history["QQQ"].last_date.weekday() == 2
+
+    signals = strategy().evaluate(context(datetime(2026, 9, 9, 9, 0), history))
+
+    assert [s for s in signals if s.side == SIDE_BUY] == []
+
+
+def test_an_open_rebalance_day_is_unaffected():
+    """The ordinary case still fires on the weekday itself, not a day later."""
+    history = calendar_history(date(2026, 8, 31))  # a Monday, exchange open
+    assert history["QQQ"].last_date == date(2026, 8, 31)
+
+    signals = strategy().evaluate(context(datetime(2026, 8, 31, 9, 0), history))
+
+    assert [s.symbol for s in signals if s.side == SIDE_BUY]
+
+
+def test_the_day_after_an_open_rebalance_day_does_not_buy_again():
+    history = calendar_history(date(2026, 9, 1))  # Tuesday, Monday was open
+
+    signals = strategy().evaluate(context(datetime(2026, 9, 1, 9, 0), history))
+
+    assert [s for s in signals if s.side == SIDE_BUY] == []
