@@ -103,6 +103,45 @@ def test_offline_gap_is_silently_skipped_not_filled(cache):
     assert "QQQ" not in result
 
 
+def test_a_symbol_listed_after_the_window_opens_still_takes_part(cache):
+    """A 2021 IPO has no 2016 bars and never will - that is not a gap.
+
+    Dropping it excludes exactly the young names a universe review adds, and
+    a long warm-up window in front of a backtest makes it happen more often.
+    """
+    cache.upsert("QQQ", [bar(date(2026, 1, d), "100") for d in range(1, 11)], source="test")
+    cache.upsert("NEW", [bar(date(2026, 1, d), "50") for d in range(6, 11)], source="test")
+    loader = HistoryLoader(cache, source=RaisingSource(), offline=True)
+
+    result = loader.load(["QQQ", "NEW"], date(2026, 1, 1), date(2026, 1, 10))
+
+    assert "NEW" in result
+    assert result["NEW"].dates[0] == date(2026, 1, 6)
+
+
+def test_a_window_ending_on_a_closed_session_keeps_the_universe(cache):
+    """``end`` is usually today, and today is often a Saturday.
+
+    Demanding a bar dated exactly ``end`` drops every symbol at once and
+    reports it as an empty cache - the whole universe vanishing because the
+    market was shut.
+    """
+    cache.upsert("QQQ", [bar(date(2026, 1, d), "100") for d in range(1, 10)], source="test")
+    loader = HistoryLoader(cache, source=RaisingSource(), offline=True, staleness_days=3)
+
+    result = loader.load(["QQQ"], date(2026, 1, 1), date(2026, 1, 10))
+
+    assert "QQQ" in result
+
+
+def test_a_series_that_stops_well_before_the_window_ends_is_still_dropped(cache):
+    """The tolerance above is for a closed session, not for a dead feed."""
+    cache.upsert("QQQ", [bar(date(2026, 1, d), "100") for d in range(1, 4)], source="test")
+    loader = HistoryLoader(cache, source=RaisingSource(), offline=True, staleness_days=3)
+
+    assert "QQQ" not in loader.load(["QQQ"], date(2026, 1, 1), date(2026, 1, 31))
+
+
 def test_refresh_raises_without_a_configured_source(cache):
     loader = HistoryLoader(cache, source=None, offline=False)
     with pytest.raises(DataUnavailableError):

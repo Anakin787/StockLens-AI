@@ -36,6 +36,19 @@ class BacktestConfig:
     #: Constant fallback used when no FX series is loaded. Backtests that care
     #: about FX precision should pass a real ``fx_history`` instead.
     fx_rate: Decimal = Decimal("1350")
+    #: First day money is deposited and the strategy is allowed to act. Bars
+    #: before it are *warm-up*: the strategy reads them, but nothing is bought
+    #: and no contribution lands.
+    #:
+    #: Without this the first deposit arrives on the first bar in ``history``,
+    #: while a momentum strategy cannot rank anything until it has
+    #: ``required_bars`` (258 sessions ~ 1.03 years) behind it - so the run
+    #: sits in 100% cash for a year while every benchmark curve is fully
+    #: invested from day one. The comparison then measures which year the
+    #: strategy happened to sit out, not the strategy: a 2022 start looked
+    #: excellent purely by holding cash through 2022, and a 2020 start looked
+    #: poor purely by holding cash through the recovery.
+    trade_from: object = None
 
 
 class Backtester:
@@ -59,6 +72,13 @@ class Backtester:
             raise ValueError(f"벤치마크 {self.config.benchmark}의 시세 데이터가 없습니다.")
 
         dates = benchmark.dates
+        if self.config.trade_from is not None:
+            dates = [day for day in dates if day >= self.config.trade_from]
+            if not dates:
+                raise ValueError(
+                    f"trade_from({self.config.trade_from}) 이후의 "
+                    f"{self.config.benchmark} 봉이 없습니다."
+                )
         universe_symbols = tuple(self.history.keys())
 
         sim = SimPortfolio(cash_usd=ZERO)

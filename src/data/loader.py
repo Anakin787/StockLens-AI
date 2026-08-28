@@ -29,6 +29,21 @@ class HistoryLoader:
         cold-start check, or the backtest engine) decides whether that is
         fatal. ``offline=False`` calls :meth:`refresh` first so a live run
         picks up what changed since the cache was last touched.
+
+        Two things that look like gaps are not, and dropping the symbol for
+        either of them loses real data:
+
+        *A later listing.* A company that IPO'd inside the window has no bars
+        before it existed, and never will. Refusing it excludes exactly the
+        young, fast-growing names a universe review is most likely to add -
+        silently, and more so the longer the warm-up window in front of the
+        backtest. It takes part from its first bar instead.
+
+        *A window that ends on a non-trading day.* ``end`` is usually today,
+        and today is often a weekend, a holiday, or a session that has not
+        closed. Demanding a bar dated exactly ``end`` then drops every symbol
+        in the universe at once and reports it as an empty cache. The tail is
+        allowed to lag by ``staleness_days``.
         """
         if not self.offline:
             self.refresh(symbols, start, end)
@@ -38,12 +53,11 @@ class HistoryLoader:
             first, last = self.cache.coverage(symbol)
             if first is None:
                 continue
-            if first > as_date(start) or last < as_date(end):
-                if self.offline:
-                    # Reproducibility over convenience: a gap here must be
-                    # loud, not filled in by a network call the caller did
-                    # not ask for.
-                    continue
+            if self.offline and last < as_date(end) - timedelta(days=self.staleness_days):
+                # Reproducibility over convenience: a genuinely short series
+                # must be loud, not filled in by a network call the caller
+                # did not ask for.
+                continue
             history = self.cache.bars(symbol, start, end)
             if history:
                 result[symbol] = history

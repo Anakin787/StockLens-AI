@@ -74,3 +74,39 @@ def test_an_empty_curve_reports_nothing_rather_than_raising():
         "mdd": None,
         "final_equity_krw": Decimal("0"),
     }
+
+
+def test_dca_curve_accepts_an_fx_series_not_just_a_constant():
+    """Both curves must price KRW deposits on the same rates.
+
+    A constant here against a real series in the strategy run would put a
+    decade of currency move on one side of the comparison only - the won went
+    from ~1150 to ~1380 over the backtest span, and that lands in the reported
+    return as if someone had earned it.
+    """
+    from datetime import date, timedelta
+    from decimal import Decimal
+    from src.backtest.benchmarks import dca_curve
+    from src.backtest.fills import ContributionSchedule
+    from src.strategy.bars import Bar, PriceHistory
+
+    start = date(2026, 1, 1)
+    days = [start + timedelta(days=i) for i in range(5)]
+    bars = tuple(
+        Bar(date=d, open=Decimal("100"), high=Decimal("100"),
+            low=Decimal("100"), close=Decimal("100"))
+        for d in days
+    )
+    history = {"QQQ": PriceHistory("QQQ", bars)}
+    schedule = ContributionSchedule(amount_krw=Decimal("0"), day_of_month=1)
+
+    flat = dca_curve(history, ["QQQ"], days, schedule, Decimal("1000000"), Decimal("1000"))
+    # Same run, but the won weakens to 2000 by the last day.
+    rates = {d: Decimal("1000") for d in days}
+    rates[days[-1]] = Decimal("2000")
+    varying = dca_curve(
+        history, ["QQQ"], days, schedule, Decimal("1000000"), lambda d: rates[d]
+    )
+
+    assert flat[-1].equity_usd == varying[-1].equity_usd
+    assert varying[-1].equity_krw == flat[-1].equity_krw * 2

@@ -25,7 +25,14 @@ def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate):
     curves are comparable point for point. A symbol with no bar on a given day
     (a later listing, a data gap) simply does not take part in that day's
     split - it is not held, and it is not missed.
+
+    ``fx_rate`` is either one Decimal for the whole span or a callable
+    ``day -> Decimal``. It must be the *same* rate source the strategy run
+    used: a constant here against a real series there would show up as a
+    currency return on one curve only, and the comparison is the only thing
+    these curves exist for.
     """
+    rate_of = fx_rate if callable(fx_rate) else (lambda _day: fx_rate)
     closes = {
         symbol: {bar.date: bar.close for bar in history[symbol].bars}
         for symbol in symbols
@@ -36,6 +43,7 @@ def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate):
     contributed_month = None
 
     for i, day in enumerate(dates):
+        fx = rate_of(day)
         cash_krw = ZERO
         month_key = (day.year, day.month)
         if i == 0:
@@ -47,7 +55,7 @@ def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate):
 
         tradable = [symbol for symbol, series in closes.items() if day in series]
         if cash_krw and tradable:
-            per_symbol_usd = (cash_krw / fx_rate) / Decimal(len(tradable))
+            per_symbol_usd = (cash_krw / fx) / Decimal(len(tradable))
             for symbol in tradable:
                 shares[symbol] += per_symbol_usd / closes[symbol][day]
 
@@ -57,7 +65,7 @@ def dca_curve(history, symbols, dates, contribution, initial_krw, fx_rate):
         curve.append(
             EquityPoint(
                 date=day,
-                equity_krw=equity_usd * fx_rate,
+                equity_krw=equity_usd * fx,
                 equity_usd=equity_usd,
                 contributed_today_krw=cash_krw,
             )

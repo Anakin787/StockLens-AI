@@ -10,7 +10,7 @@ share a code path.
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -33,6 +33,12 @@ from src.toss.errors import TossConfigError
 
 DEFAULT_STRATEGY = "src.strategy.momentum_dca:MomentumDcaStrategy"
 
+#: USD/KRW daily series. Every deposit in this backtest is KRW converted to
+#: USD, so a constant rate quietly prices 2012 dollars at today's won - the
+#: won moved from ~1150 to ~1380 over the span, and that move lands in the
+#: reported return as if the strategy had earned it.
+FX_SYMBOL = "KRW=X"
+
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="M7 Terminal 백테스트")
@@ -48,6 +54,18 @@ def parse_args(argv=None):
         "--refresh", action="store_true", help="시세 캐시만 갱신하고 종료 (백테스트 실행 안 함)"
     )
     parser.add_argument("--split", default=None, help="인/아웃오브샘플 분리 기준일 (YYYY-MM-DD)")
+    parser.add_argument(
+        "--warmup-days",
+        type=int,
+        default=None,
+        help="거래 시작 전에 전략이 읽을 과거 봉의 기간(일). 기본은 전략의 "
+        "required_bars에서 계산합니다. 0이면 워밍업 없이(예전 동작) 돕니다.",
+    )
+    parser.add_argument(
+        "--fx",
+        default=FX_SYMBOL,
+        help=f"환율 시계열 심볼 (기본 {FX_SYMBOL}). 'none'이면 상수 환율을 씁니다.",
+    )
     parser.add_argument(
         "--no-compare",
         action="store_true",
@@ -90,14 +108,27 @@ def _print_report(label, result):
             )
 
 
-def _print_comparison(result, history, backtest_config, benchmark):
+def _print_comparison(result, history, backtest_config, benchmark, fx_history=None):
     """The strategy against the same money with no strategy at all.
 
     Printed by default, not behind a flag, because a strategy's own CAGR is
     not evidence of anything on a universe assembled with hindsight - only
     the gap to buying that same universe outright is.
+
+    The benchmark curves run over the *traded* dates and on the *same* FX
+    series as the strategy. Both matter: warm-up bars handed to a benchmark
+    would have it investing a year before the strategy is allowed to, and a
+    constant rate here against a real series there would put a decade of
+    currency move on one curve only.
     """
     dates = history[benchmark].dates
+    if backtest_config.trade_from is not None:
+        dates = [day for day in dates if day >= backtest_config.trade_from]
+    fx_rate = backtest_config.fx_rate
+    if fx_history is not None:
+        def fx_rate(day, _series=fx_history, _fallback=backtest_config.fx_rate):
+            last = _series.as_of(day).last()
+            return last.close if last is not None else _fallback
     rows = [
         (f"유니버스 {len(history)}종목 균등 DCA", sorted(history)),
         (f"{benchmark} DCA", [benchmark]),
@@ -112,7 +143,7 @@ def _print_comparison(result, history, backtest_config, benchmark):
                 dates,
                 backtest_config.contribution,
                 backtest_config.initial_krw,
-                backtest_config.fx_rate,
+                fx_rate,
             )
         )
         twr = f"{stats['twr_cagr']:.2%}" if stats["twr_cagr"] is not None else "계산 불가"
@@ -140,20 +171,47 @@ def run(argv=None):
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
 
+    # Warm-up. The strategy needs `required_bars` sessions of history before
+    # it can rank anything; loading only [start, end] means it holds cash for
+    # that first stretch while every comparison curve is fully invested, and
+    # the gap between them then measures which year the strategy sat out.
+    # Bars before `start` are read but never traded on.
+    warmup_days = args.warmup_days
+    if warmup_days is None:
+        required = getattr(getattr(strategy, "params", None), "required_bars", 0)
+        # Sessions -> calendar days (252 sessions a year), plus a month of slack
+        # so a long holiday stretch cannot leave the window one bar short.
+        warmup_days = int(required * 365 / 252) + 30 if required else 0
+    load_start = start - timedelta(days=warmup_days)
+    trade_from = start if warmup_days else None
+
+    fx_symbol = None if args.fx.lower() == "none" else args.fx
+
     if args.refresh or not args.offline:
         print(f">>> 시세 캐시 갱신 중... ({sorted(symbols)})")
-        added = loader.refresh(sorted(symbols), start, end)
+        added = loader.refresh(sorted(symbols), load_start, end)
         print(f"    추가된 봉 수: {added}")
+        if fx_symbol:
+            loader.refresh([fx_symbol], load_start, end)
         if args.refresh:
             return 0
 
-    history = loader.load(sorted(symbols), start, end)
+    history = loader.load(sorted(symbols), load_start, end)
     missing = symbols - set(history)
     if missing:
         print(f"!!! 캐시에 없는 심볼(건너뜀): {sorted(missing)}")
     if benchmark not in history:
         print(f"!!! 벤치마크 {benchmark}의 데이터가 없어 백테스트를 진행할 수 없습니다.")
         return 1
+
+    fx_history = None
+    if fx_symbol:
+        fx_history = loader.load([fx_symbol], load_start, end).get(fx_symbol)
+        if fx_history is None:
+            print(
+                f"!!! 환율 {fx_symbol} 시계열이 캐시에 없습니다. 상수 환율로 진행합니다 "
+                f"(--refresh 로 받거나 --fx none 으로 명시하세요)."
+            )
 
     backtest_config = BacktestConfig(
         initial_krw=args.initial,
@@ -164,6 +222,7 @@ def run(argv=None):
         # would refuse to run.
         limits=RiskLimits(**{**config.trading.limits, "strict": False}),
         benchmark=benchmark,
+        trade_from=trade_from,
     )
 
     print("=" * 56)
@@ -171,11 +230,11 @@ def run(argv=None):
     print(f"  전략: {strategy.name} · 기간: {start} ~ {end}")
     print("=" * 56)
 
-    result = Backtester(strategy, history, backtest_config).run()
+    result = Backtester(strategy, history, backtest_config, fx_history=fx_history).run()
     _print_report("전체 구간", result)
 
     if not args.no_compare:
-        _print_comparison(result, history, backtest_config, benchmark)
+        _print_comparison(result, history, backtest_config, benchmark, fx_history)
 
     if args.split:
         split_day = date.fromisoformat(args.split)
