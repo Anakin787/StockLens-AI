@@ -311,6 +311,14 @@ DEFAULT_UNIVERSE = Universe(
         _stock("DIS", "Walt Disney"),
         _stock("PG", "Procter & Gamble"),
         _stock("KO", "Coca-Cola"),
+        # --- higher-volatility growth ---
+        # Capped tighter than the mega caps, not because the ranking cannot
+        # see the risk - vol_adjust already divides its score by realized
+        # volatility, which will keep it out of the top two most weeks - but
+        # because the weeks it does win are exactly the weeks a full-size
+        # position would hurt. Its history starts 2021, so a backtest that
+        # begins earlier drops it outright and says so.
+        _stock("IONQ", "IonQ", max_weight="0.20"),
         # --- energy and industrials ---
         _stock("XOM", "Exxon Mobil"),
         _stock("CVX", "Chevron"),

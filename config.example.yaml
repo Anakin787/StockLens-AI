@@ -161,6 +161,7 @@ trading:
       DIS: 0.35
       PG: 0.35
       KO: 0.35
+      IONQ: 0.20
       XOM: 0.35
       CVX: 0.35
       CAT: 0.35
