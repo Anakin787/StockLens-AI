@@ -36,6 +36,28 @@ def _fmt_signed(value):
     return f"{amount:+,} KRW"
 
 
+def database_properties(client, database_id):
+    """The column schema of a database, on either Notion API version.
+
+    Notion 2025-09-03 moved a database's columns onto its *data sources*, so
+    ``databases.retrieve`` stopped returning ``properties`` - it now returns a
+    ``data_sources`` list instead. Reading only the old shape makes a healthy
+    database look like it has no columns at all, which reads exactly like a
+    misnamed Report/Date column. Ask the data source when there is one, and
+    fall back to the pre-2025 shape otherwise.
+    """
+    database = client.databases.retrieve(database_id=database_id)
+    properties = database.get("properties")
+    if properties:
+        return properties
+
+    sources = database.get("data_sources") or []
+    if not sources:
+        return {}
+    source = client.request(path=f"data_sources/{sources[0]['id']}", method="GET")
+    return source.get("properties") or {}
+
+
 def resolve_parent(client, target_id):
     """Work out whether ``target_id`` is a database or an ordinary page.
 

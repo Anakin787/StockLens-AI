@@ -60,7 +60,12 @@ def _check_notion(config):
         _warn("notion", "notion-client 가 설치되지 않았습니다.")
         return
 
-    from src.notion import PARENT_DATABASE, REQUIRED_PROPS_HINT, resolve_parent
+    from src.notion import (
+        PARENT_DATABASE,
+        REQUIRED_PROPS_HINT,
+        database_properties,
+        resolve_parent,
+    )
 
     client = Client(auth=config.notion.token)
     try:
@@ -75,8 +80,7 @@ def _check_notion(config):
 
     if kind == PARENT_DATABASE:
         _ok("database", detail or config.notion.database_id)
-        database = client.databases.retrieve(database_id=config.notion.database_id)
-        properties = database.get("properties") or {}
+        properties = database_properties(client, config.notion.database_id)
         for name, expected in REQUIRED_PROPS_HINT.items():
             actual = (properties.get(name) or {}).get("type")
             if actual == expected:

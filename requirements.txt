@@ -1,7 +1,7 @@
 pyyaml
 python-dotenv
 requests
-notion-client
+notion-client>=3.1.0
 beautifulsoup4
 feedparser
 google-genai
