@@ -360,3 +360,109 @@ def test_audit_endpoint_rejects_an_unknown_category(client):
     # The pattern is the allow-list; an arbitrary category would silently
     # return an empty list and read as "nothing ever happened".
     assert client.get("/api/audit?category=whatever").status_code == 422
+
+
+# ------------------------------------------------------------- kill switch
+
+
+@pytest.fixture
+def halted_paths(service, tmp_path):
+    """Point the service's kill switch at a temp file, not the repo root."""
+    import dataclasses
+
+    from src.config import TradingConfig
+
+    path = tmp_path / "KILL_SWITCH"
+    service.config = dataclasses.replace(
+        service.config,
+        trading=TradingConfig(
+            enabled=True,
+            kill_switch_path=str(path),
+            strategies=["src.strategy.momentum_dca:MomentumDCA"],
+        ),
+    )
+    return path
+
+
+def test_status_reports_the_three_facts_separately(client, halted_paths):
+    data = client.get("/api/trading/status").json()
+
+    assert data["engine_enabled"] is True
+    assert data["kill_switch"]["active"] is False
+    assert data["halted"] is False
+    # LIVE stays shut until design 6 [10] has its own verification.
+    assert data["live_open"] is False
+    assert data["mode"] == "paper"
+
+
+def test_engaging_the_kill_switch_creates_the_file_the_gate_reads(client, halted_paths):
+    response = client.post(
+        "/api/trading/kill-switch", json={"active": True, "reason": "장중 이상"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["halted"] is True
+    assert halted_paths.exists()
+
+    from src.execution.risk import kill_switch_active
+
+    assert kill_switch_active(str(halted_paths)) is True
+
+
+def test_a_flip_is_audited_and_a_repeat_is_not(client, halted_paths, service):
+    client.post("/api/trading/kill-switch", json={"active": True, "reason": "장중 이상"})
+    client.post("/api/trading/kill-switch", json={"active": True, "reason": "장중 이상"})
+    client.post("/api/trading/kill-switch", json={"active": False})
+
+    entries = client.get("/api/audit?category=kill_switch").json()["entries"]
+
+    # Two transitions, three requests: re-engaging an engaged switch changed
+    # nothing, and a log full of non-events is unreadable on the day it counts.
+    assert len(entries) == 2
+    assert entries[0]["changes"][0]["after"] == "해제"
+    assert "장중 이상" in entries[1]["summary"]
+    assert entries[1]["changed_by_method"] == "direct"
+
+
+def test_releasing_a_switch_that_is_not_engaged_is_harmless(client, halted_paths):
+    data = client.post("/api/trading/kill-switch", json={"active": False}).json()
+
+    assert data["halted"] is False
+    assert client.get("/api/audit?category=kill_switch").json()["entries"] == []
+
+
+# -------------------------------------------------------------- freshness
+
+
+def test_health_reports_a_fresh_snapshot_as_fresh(client, service):
+    service.store.save_snapshot(service.portfolio.snapshot())
+
+    data = client.get("/api/health").json()
+
+    assert data["snapshot_stale"] is False
+    assert data["snapshot_age_hours"] < 1
+    assert data["last_snapshot_ts"] is not None
+
+
+def test_health_flags_a_snapshot_older_than_a_day(client, service):
+    from datetime import datetime, timedelta
+
+    stale = (datetime.now() - timedelta(days=3)).isoformat()
+    service.store.save_snapshot(service.portfolio.snapshot(), ts=stale)
+
+    data = client.get("/api/health").json()
+
+    # The August outage was invisible because a job that does not run leaves
+    # no error - only an ageing newest row.
+    assert data["snapshot_stale"] is True
+    assert data["snapshot_age_hours"] > 70
+
+
+def test_no_snapshots_at_all_is_not_reported_as_stale(client):
+    data = client.get("/api/health").json()
+
+    # Never having run and having stopped running are different problems, and
+    # snapshot_count already says which one this is.
+    assert data["snapshot_stale"] is False
+    assert data["last_snapshot_ts"] is None
+    assert data["snapshot_count"] == 0

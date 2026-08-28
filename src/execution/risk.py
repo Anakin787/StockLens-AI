@@ -19,7 +19,7 @@ constructing a context rather than by mocking a broker.
 
 import os
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.models import ZERO
@@ -47,6 +47,84 @@ def kill_switch_active(path=_KILL_SWITCH_DEFAULT):
     in to anything.
     """
     return os.path.exists(path)
+
+
+def kill_switch_state(path=_KILL_SWITCH_DEFAULT):
+    """What the kill switch file says, for anything that has to display it.
+
+    The file is the source of truth about *whether* trading is stopped; its
+    contents are only ever about *why*, and they are optional. A file made by
+    hand (``touch KILL_SWITCH``) is as valid a stop as one written here, so a
+    missing header is filled in from the file's mtime and labelled as such
+    rather than left blank or, worse, guessed at.
+    """
+    if not os.path.exists(path):
+        return {
+            "active": False,
+            "path": path,
+            "engaged_at": None,
+            "engaged_at_source": None,
+            "actor": None,
+            "reason": None,
+        }
+
+    fields = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                key, sep, value = line.partition(":")
+                if sep and key.strip() in ("engaged_at", "by", "reason"):
+                    fields[key.strip()] = value.strip()
+    except OSError:
+        pass
+
+    engaged_at = fields.get("engaged_at")
+    source = "file"
+    if not engaged_at:
+        source = "mtime"
+        try:
+            engaged_at = datetime.fromtimestamp(
+                os.path.getmtime(path)
+            ).isoformat(timespec="seconds")
+        except OSError:
+            engaged_at, source = None, None
+
+    return {
+        "active": True,
+        "path": path,
+        "engaged_at": engaged_at,
+        "engaged_at_source": source,
+        "actor": fields.get("by"),
+        "reason": fields.get("reason") or None,
+    }
+
+
+def engage_kill_switch(path=_KILL_SWITCH_DEFAULT, reason=None, actor=None, at=None):
+    """Stop the engine by creating the file, and record why in it.
+
+    Writing the reason into the file rather than only into the audit log
+    matters for the case this switch exists for: somebody stops trading from
+    one machine and somebody else - or the same person a week later - finds
+    the file on another. The stop has to explain itself where it lives.
+    """
+    at = at or datetime.now()
+    lines = [f"engaged_at: {at.isoformat(timespec='seconds')}"]
+    if actor:
+        lines.append(f"by: {actor}")
+    if reason and str(reason).strip():
+        lines.append(f"reason: {' '.join(str(reason).split())}")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return kill_switch_state(path)
+
+
+def release_kill_switch(path=_KILL_SWITCH_DEFAULT):
+    """Remove the file. True if it was there, False if it already was not."""
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return False
 
 
 @dataclass(frozen=True)

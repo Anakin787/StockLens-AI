@@ -353,6 +353,41 @@ def review_entries(review, actor="AI universe review", detected_at=None):
     return entries
 
 
+def kill_switch_entry(state, active, actor=None, detected_at=None):
+    """One audit row for a kill-switch flip, written by whoever flipped it.
+
+    This is the one audited change with no file to date afterwards: the act
+    *is* the write, so ``changed_at`` equals ``detected_at`` and the method is
+    ``direct``. Only a real transition should be recorded - re-engaging an
+    already-engaged switch changes nothing and deserves no row, or the log
+    fills with non-events on the day it matters most.
+    """
+    detected_at = detected_at or datetime.now().isoformat()
+    reason = (state or {}).get("reason")
+    return {
+        "detected_at": detected_at,
+        "changed_at": detected_at,
+        "changed_by_method": "direct",
+        "actor_kind": ACTOR_HUMAN,
+        "actor": actor or local_actor(),
+        "source": (state or {}).get("path") or "KILL_SWITCH",
+        "category": "kill_switch",
+        "summary": (
+            "킬 스위치 발동 — 모든 발주 중단" + (f": {reason}" if reason else "")
+            if active
+            else "킬 스위치 해제 — 발주 재개"
+        ),
+        "changes": [
+            {
+                "target": "kill_switch",
+                "before": "해제" if active else "발동",
+                "after": "발동" if active else "해제",
+                "evidence": reason,
+            }
+        ],
+    }
+
+
 def baseline_entry(settings, trading_config=None, actor=None, detected_at=None):
     """The single entry a first-ever run writes instead of 39 "added" rows.
 

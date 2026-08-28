@@ -97,9 +97,17 @@
         </div>
       </div>
     </div>
-    <div class="flex items-center gap-2 px-3 py-2 text-on-surface-variant/70 text-xs font-data-mono">
-      <span class="material-symbols-outlined text-[16px] animate-spin-slow">sync</span>
-      <span id="last-sync">Last Sync: —</span>
+    <div class="px-3 py-2 text-xs font-data-mono space-y-1">
+      <div class="flex items-center gap-2 text-on-surface-variant/70">
+        <span class="material-symbols-outlined text-[16px] animate-spin-slow">sync</span>
+        <span id="last-sync">Last Sync: —</span>
+      </div>
+      <!-- Last Sync is this page talking to the broker; this is the daily job
+           actually having written a row. Only the second one can go quiet. -->
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-[16px] text-on-surface-variant/70">database</span>
+        <span id="snapshot-age" class="text-on-surface-variant/70">Snapshot: —</span>
+      </div>
     </div>
   </div>
 </nav>
@@ -116,10 +124,10 @@
       </div>
       <div class="h-6 w-px bg-outline-variant hidden lg:block"></div>
       <div class="flex items-center gap-4">
-        <!-- Disabled until the Phase 2 trading engine exists. A button that
-             looks live but does nothing is worse than an honest one. -->
-        <button disabled title="Phase 2 자동매매 엔진 연결 후 활성화됩니다"
-          class="bg-surface-container text-on-surface-variant/40 border border-outline-variant/40 px-4 py-1.5 rounded font-label-caps text-label-caps tracking-wide cursor-not-allowed">
+        <!-- The engine's stop control. Live: it creates/removes the
+             KILL_SWITCH file the risk gate checks first. -->
+        <button id="kill-btn" title="자동매매 발주를 즉시 중단합니다"
+          class="bg-surface-container text-on-surface-variant border border-outline-variant/40 px-4 py-1.5 rounded font-label-caps text-label-caps tracking-wide">
           PAUSE TRADING
         </button>
         <button class="text-on-surface-variant hover:text-on-surface transition-colors" id="glossary-btn" title="용어 설명">
@@ -275,18 +283,56 @@
         </div>
       </section>
 
-      <!-- ============ TRADING (Phase 2) ============ -->
-      <section data-view="trading" hidden class="bg-surface-container rounded-lg border border-outline-variant/50 p-12 text-center">
-        <span class="material-symbols-outlined text-on-surface-variant/30 text-5xl mb-3">construction</span>
-        <h3 class="text-headline-md font-bold mb-2">Trading — Phase 2</h3>
-        <p class="text-on-surface-variant max-w-xl mx-auto">
-          자동매매 엔진은 아직 구현되지 않았습니다. 현재 토스 API 클라이언트는
-          <code class="font-data-mono text-primary">allow_write=False</code> 로 생성되어 주문 계열
-          엔드포인트가 구조적으로 차단되어 있습니다.
-        </p>
-        <p class="text-on-surface-variant/60 text-sm mt-4">
-          예정: 전략 엔진 · 리스크 게이트 · 조건주문(OCO) 손절 · 주문 이력
-        </p>
+      <!-- ============ TRADING ============ -->
+      <section data-view="trading" hidden class="space-y-gutter">
+
+        <div class="bg-surface-container rounded-lg border border-outline-variant/50 overflow-hidden">
+          <div class="p-4 border-b border-outline-variant/50 flex items-center justify-between gap-4">
+            <h3 class="text-headline-md font-bold">Engine Control</h3>
+            <span id="engine-state" class="font-label-caps text-label-caps px-2 py-1 rounded border border-outline-variant/40 text-on-surface-variant">—</span>
+          </div>
+
+          <!-- Three separate facts, shown separately: which one is stopping
+               the engine decides what you would change to start it. -->
+          <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30">
+            <div class="p-4">
+              <p class="text-on-surface-variant text-label-caps uppercase tracking-wider mb-2">Kill Switch</p>
+              <p class="font-data-mono text-lg font-bold" id="ks-state">—</p>
+              <p class="text-on-surface-variant/70 text-xs mt-1 font-data-mono" id="ks-detail">—</p>
+            </div>
+            <div class="p-4">
+              <p class="text-on-surface-variant text-label-caps uppercase tracking-wider mb-2">Engine</p>
+              <p class="font-data-mono text-lg font-bold" id="engine-enabled">—</p>
+              <p class="text-on-surface-variant/70 text-xs mt-1 font-data-mono" id="engine-strategies">—</p>
+            </div>
+            <div class="p-4">
+              <p class="text-on-surface-variant text-label-caps uppercase tracking-wider mb-2">Mode</p>
+              <p class="font-data-mono text-lg font-bold" id="engine-mode">—</p>
+              <p class="text-on-surface-variant/70 text-xs mt-1">LIVE는 설계 6절 [10] 검증 후 열립니다</p>
+            </div>
+          </div>
+
+          <div class="p-4 border-t border-outline-variant/50 flex flex-wrap items-center gap-3">
+            <input id="ks-reason" type="text" maxlength="200" placeholder="중단 사유 (선택) — 파일과 감사 로그에 함께 남습니다"
+              class="flex-1 min-w-[240px] bg-surface-container-highest border border-outline-variant/40 rounded px-3 py-2 text-body-md text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary" />
+            <button id="ks-toggle"
+              class="px-4 py-2 rounded font-label-caps text-label-caps tracking-wide border border-outline-variant/40 bg-surface-container text-on-surface">
+              —
+            </button>
+          </div>
+          <p class="px-4 pb-4 text-on-surface-variant/60 text-xs" id="ks-help">
+            킬 스위치는 <code class="font-data-mono">KILL_SWITCH</code> 파일 하나입니다. 리스크 게이트가 가장 먼저,
+            어떤 예외도 없이 확인합니다. 이 화면이 닿지 않을 때는 파일을 직접 만들어도 똑같이 멈춥니다.
+          </p>
+        </div>
+
+        <div class="bg-surface-container rounded-lg border border-outline-variant/50 p-6">
+          <h3 class="text-headline-md font-bold mb-2">주문 · 신호</h3>
+          <p class="text-on-surface-variant text-body-md">
+            신호·주문 이력 화면은 아직 없습니다. 현재는 <code class="font-data-mono text-primary">python trade.py</code>
+            실행 로그와 감사 로그가 유일한 기록입니다.
+          </p>
+        </div>
       </section>
 
       <!-- ============ REPORTS ============ -->
@@ -317,6 +363,7 @@
             <button class="audit-tab" data-category="limits">리스크 한도</button>
             <button class="audit-tab" data-category="veto">AI 보류</button>
             <button class="audit-tab" data-category="candidate">AI 제안</button>
+            <button class="audit-tab" data-category="kill_switch">킬 스위치</button>
           </div>
         </div>
         <div id="audit-list" class="divide-y divide-outline-variant/30"></div>

@@ -20,6 +20,14 @@ from src.toss.errors import TossError
 #: minute is imperceptible; the calendar changes a couple of times a day.
 TTL_PORTFOLIO = 60
 TTL_MARKET_STATUS = 300
+#: The freshness check reads the store, and the thing it watches for moves on
+#: the scale of a day, so it does not need to be re-read on every 15s poll.
+TTL_FRESHNESS = 300
+
+#: A snapshot older than this means the daily job has not run. Set a little
+#: over a day so a normal weekday gap - the job runs at 10:00, someone looks
+#: at 09:00 - does not raise it, while a genuinely skipped run does.
+SNAPSHOT_STALE_HOURS = 26
 
 
 class _Cached:
@@ -247,14 +255,118 @@ class DashboardService:
 
     def health(self):
         snapshot, error = self.snapshot()
+        freshness = self.snapshot_freshness()
         return {
             "connected": snapshot is not None and not error,
             "error": error,
             "last_sync": self.last_sync.isoformat() if self.last_sync else None,
             "snapshot_count": self.store.snapshot_count(),
-            # Phase 2 wires these up; the UI greys the controls out until then.
-            "trading_enabled": False,
+            "trading_enabled": self.config.trading.enabled,
+            **freshness,
         }
+
+    def _freshness_cache(self):
+        # Resolved lazily rather than in __init__ so that a service built
+        # without running __init__ (tests) still gets one.
+        cache = getattr(self, "_freshness", None)
+        if cache is None:
+            cache = _Cached(TTL_FRESHNESS)
+            self._freshness = cache
+        return cache
+
+    def snapshot_freshness(self):
+        """How long since the daily job last wrote a snapshot.
+
+        The 8-day outage in August was invisible precisely because a report
+        that does not run appears nowhere: no row, no error, no log. The only
+        evidence of it was the age of the newest row, so the dashboard reads
+        that age out loud instead of leaving it to be noticed.
+        """
+
+        def load():
+            row = self.store.latest_snapshot() or {}
+            ts = row.get("ts")
+            parsed = _parse_ts(ts)
+            age = None
+            if parsed is not None:
+                age = (datetime.now() - parsed).total_seconds() / 3600
+            return {
+                "last_snapshot_ts": ts,
+                "snapshot_age_hours": round(age, 1) if age is not None else None,
+                # No snapshot at all is not stale - it is a system that has
+                # never run, which the count already says. Claiming staleness
+                # would point at the wrong problem.
+                "snapshot_stale": age is not None and age > SNAPSHOT_STALE_HOURS,
+                "snapshot_stale_after_hours": SNAPSHOT_STALE_HOURS,
+            }
+
+        try:
+            value, _ = self._freshness_cache().get(load)
+        except Exception:  # noqa: BLE001 - the store being down is its own alarm
+            value = None
+        return value or {
+            "last_snapshot_ts": None,
+            "snapshot_age_hours": None,
+            "snapshot_stale": False,
+            "snapshot_stale_after_hours": SNAPSHOT_STALE_HOURS,
+        }
+
+    # -------------------------------------------------------- kill switch
+
+    def trading_status(self):
+        """What the engine may do right now, and what is stopping it.
+
+        Three separate facts, kept separate: the config switch, the kill
+        switch file, and whether LIVE is open at all. Collapsing them into one
+        "enabled" flag would answer "can it trade?" while hiding the only
+        useful question when the answer is no - which of the three to change.
+        """
+        from src.execution.risk import kill_switch_state
+
+        trading = self.config.trading
+        state = kill_switch_state(trading.kill_switch_path)
+        return {
+            "engine_enabled": trading.enabled,
+            "strategies": list(trading.strategies),
+            "mode": "paper",
+            # Design 6 [10]: LIVE opens only after its own verification.
+            "live_open": False,
+            "kill_switch": state,
+            "halted": bool(state["active"]),
+        }
+
+    def set_kill_switch(self, active, reason=None, actor=None):
+        """Engage or release the kill switch, and audit a real transition.
+
+        The write happens before the audit entry: if the store is unreachable
+        the engine must still stop. A stop nobody logged beats a log of a stop
+        that did not happen.
+        """
+        from src.audit import kill_switch_entry
+        from src.execution.risk import (
+            engage_kill_switch,
+            kill_switch_state,
+            release_kill_switch,
+        )
+
+        path = self.config.trading.kill_switch_path
+        was_active = kill_switch_state(path)["active"]
+
+        if active:
+            state = engage_kill_switch(path, reason=reason, actor=actor or "dashboard")
+        else:
+            release_kill_switch(path)
+            state = kill_switch_state(path)
+
+        if state["active"] != was_active:
+            try:
+                self.store.save_audit_entries(
+                    [kill_switch_entry(state, state["active"], actor=actor)]
+                )
+            except Exception:  # noqa: BLE001 - see docstring
+                pass
+
+        return self.trading_status()
 
     def settings(self):
         """Read-only view of the effective config, with secrets masked."""
@@ -280,6 +392,19 @@ class DashboardService:
 
     def close(self):
         self.portfolio.close()
+
+
+def _parse_ts(value):
+    """Parse a stored ISO timestamp, tolerating the ones we did not write."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    # Rows are written with local naive timestamps; an aware one from some
+    # other writer is compared in local terms rather than crashing on it.
+    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
 
 
 def _decimal_or_none(value):

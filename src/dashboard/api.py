@@ -1,8 +1,8 @@
 """FastAPI app serving the M7 Terminal dashboard.
 
-Read-only in Phase 1. Bind to 127.0.0.1 - once Phase 2 wires the kill switch
-and order cancellation into this app, it becomes a control surface for a live
-brokerage account, and it has no authentication.
+Read-only apart from the kill switch (design 6 [12]) and cosmetic name
+overrides. Bind to 127.0.0.1: this app can now stop the trading engine and it
+has no authentication.
 
     uvicorn src.dashboard.api:app --host 127.0.0.1 --port 8000
 """
@@ -80,9 +80,29 @@ def reports(limit: int = Query(20, ge=1, le=100)):
 @app.get("/api/audit")
 def audit(
     limit: int = Query(50, ge=1, le=200),
-    category: str | None = Query(None, pattern="^(baseline|universe|strategies|strategy_params|limits|veto|candidate)$"),
+    category: str | None = Query(None, pattern="^(baseline|universe|strategies|strategy_params|limits|veto|candidate|kill_switch)$"),
 ):
     return get_service().audit(limit=limit, category=category)
+
+
+@app.get("/api/trading/status")
+def trading_status():
+    return get_service().trading_status()
+
+
+@app.post("/api/trading/kill-switch")
+def set_kill_switch(
+    active: bool = Body(embed=True),
+    reason: str | None = Body(default=None, embed=True, max_length=200),
+):
+    """Engage or release the kill switch.
+
+    This is the first endpoint that changes what the engine does, and the app
+    still has no authentication - which is why it binds to 127.0.0.1 and why
+    the only write it accepts is the one that *stops* trading (and its
+    reversal). Nothing here can place an order.
+    """
+    return get_service().set_kill_switch(active, reason=reason)
 
 
 @app.get("/api/health")

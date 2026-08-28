@@ -3,7 +3,14 @@
 from datetime import datetime
 from decimal import Decimal
 
-from src.execution.risk import RiskGate, RiskLimits, kill_switch_active
+from src.execution.risk import (
+    RiskGate,
+    RiskLimits,
+    engage_kill_switch,
+    kill_switch_active,
+    kill_switch_state,
+    release_kill_switch,
+)
 from src.models import SOURCE_TOSS, PortfolioSnapshot, Position
 from src.strategy.base import (
     ORDER_MARKET,
@@ -441,3 +448,40 @@ def test_lenient_mode_still_enforces_the_daily_limits():
         daily_usage=DailyUsage(order_count=99),
     )
     assert rule_of(evaluate(buy(), bare, lenient)) == "daily-order-limit"
+
+
+def test_engaging_the_kill_switch_records_why_in_the_file(tmp_path):
+    path = str(tmp_path / "KILL_SWITCH")
+
+    state = engage_kill_switch(path, reason="  브로커 오류  확인 중 ", actor="dashboard")
+
+    assert kill_switch_active(path) is True
+    assert state["active"] is True
+    assert state["actor"] == "dashboard"
+    # Whitespace collapsed so a pasted reason cannot break the line format.
+    assert state["reason"] == "브로커 오류 확인 중"
+    assert state["engaged_at_source"] == "file"
+
+
+def test_a_hand_made_kill_switch_file_is_a_valid_stop(tmp_path):
+    """``touch KILL_SWITCH`` must work: that is the point of using a file."""
+    path = tmp_path / "KILL_SWITCH"
+    path.write_text("")
+
+    state = kill_switch_state(str(path))
+
+    assert state["active"] is True
+    assert state["reason"] is None
+    # No header to read, so the time is the file's - and says so rather than
+    # presenting an mtime as if it were a recorded decision.
+    assert state["engaged_at_source"] == "mtime"
+    assert state["engaged_at"] is not None
+
+
+def test_releasing_reports_whether_it_had_been_engaged(tmp_path):
+    path = str(tmp_path / "KILL_SWITCH")
+    engage_kill_switch(path)
+
+    assert release_kill_switch(path) is True
+    assert release_kill_switch(path) is False
+    assert kill_switch_state(path)["active"] is False

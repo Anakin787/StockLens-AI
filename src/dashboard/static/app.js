@@ -25,7 +25,7 @@ const ALLOCATION_COLORS = {
 };
 
 const state = { view: "overview", range: "3M", allocBy: "market", history: null,
-                editingName: false, auditCategory: "" };
+                editingName: false, auditCategory: "", trading: null, health: null };
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -185,9 +185,55 @@ function renderMarketChip(id, label, status) {
   chip.className = `${tone} border px-2 py-1 rounded flex items-center gap-1`;
 }
 
+// Alerts that are about the system rather than about a holding: the engine
+// being halted, and the daily job having stopped running. The second one is
+// here because an outage in August lasted eight days without appearing
+// anywhere - a report that does not run produces no error to show.
+function systemAlerts() {
+  const alerts = [];
+  const kill = state.trading?.kill_switch;
+  if (kill?.active) {
+    alerts.push({
+      color: COLORS.negative,
+      icon: "block",
+      title: "킬 스위치 발동 — 자동매매가 중단되어 있습니다",
+      detail: (kill.reason ? `사유: ${kill.reason} · ` : "") +
+        (kill.engaged_at ? `${fmtStamp(kill.engaged_at)}부터` : "") +
+        (kill.engaged_at_source === "mtime" ? " (파일 수정시각 기준)" : ""),
+    });
+  }
+  const health = state.health;
+  if (health?.snapshot_stale) {
+    const hours = Math.round(health.snapshot_age_hours);
+    alerts.push({
+      color: COLORS.warning,
+      icon: "update_disabled",
+      title: `일일 스냅샷이 ${hours}시간째 갱신되지 않았습니다`,
+      detail: `마지막 기록 ${fmtStamp(health.last_snapshot_ts)}. 예약 실행이 실패하고 있을 수 있습니다 ` +
+        "— 스냅샷은 소급 생성할 수 없으므로 놓친 날은 영구히 빕니다. logs\\report_*.log와 작업 스케줄러를 확인하세요.",
+    });
+  }
+  return alerts;
+}
+
+function renderAlert({ color, icon, title, detail }) {
+  const div = document.createElement("div");
+  div.className = "bg-surface-container-high border-l-[3px] rounded shadow-sm p-4 flex items-start gap-3 mb-gutter";
+  div.style.borderLeftColor = color;
+  div.innerHTML = `
+    <span class="material-symbols-outlined mt-0.5" style="color:${color};font-variation-settings:'FILL' 1;">${icon}</span>
+    <div><p class="text-[15px] font-semibold text-on-surface leading-tight"></p>
+    <p class="text-body-md text-on-surface-variant mt-1 text-sm"></p></div>`;
+  const [titleEl, detailEl] = div.querySelectorAll("p");
+  titleEl.textContent = title;
+  detailEl.textContent = detail;
+  return div;
+}
+
 function renderAlerts(warnings) {
   const host = $("alerts");
   host.innerHTML = "";
+  systemAlerts().forEach((alert) => host.appendChild(renderAlert(alert)));
   warnings.forEach((warning) => {
     const div = document.createElement("div");
     div.className = "bg-surface-container-high border-l-[3px] rounded shadow-sm p-4 flex items-start gap-3 mb-gutter";
@@ -544,15 +590,119 @@ async function loadSettings() {
 async function loadHealth() {
   try {
     const data = await getJSON("/api/health");
+    state.health = data;
     $("api-status").textContent = "Brokerage API: " + (data.connected ? "Connected" : "Error");
     $("api-dot").className = "w-2 h-2 rounded-full " +
       (data.connected ? "bg-secondary-container animate-pulse" : "bg-error");
     $("last-sync").textContent = "Last Sync: " +
       (data.last_sync ? new Date(data.last_sync).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "—");
+    renderSnapshotAge(data);
   } catch (err) {
     $("api-status").textContent = "Brokerage API: Offline";
     $("api-dot").className = "w-2 h-2 rounded-full bg-error";
   }
+}
+
+// "Last Sync" is when this page last talked to the brokerage, which says
+// nothing about whether the daily job ran. They are different clocks and the
+// footer now shows both, because only the second one ever went quiet.
+function renderSnapshotAge(health) {
+  const line = $("snapshot-age");
+  if (!line) return;
+  if (health.last_snapshot_ts === null || health.last_snapshot_ts === undefined) {
+    line.textContent = "Snapshot: —";
+    line.className = "text-on-surface-variant/70";
+    return;
+  }
+  const hours = health.snapshot_age_hours;
+  line.textContent = "Snapshot: " + (hours < 1 ? "방금" : `${Math.round(hours)}h ago`);
+  line.className = health.snapshot_stale ? "text-tertiary-fixed-dim font-bold" : "text-on-surface-variant/70";
+  line.title = `마지막 스냅샷 ${fmtStamp(health.last_snapshot_ts)} · ` +
+    `${health.snapshot_stale_after_hours}시간을 넘기면 경보`;
+}
+
+/* ------------------------------------------------------- engine control */
+
+async function loadTrading() {
+  try {
+    state.trading = await getJSON("/api/trading/status");
+  } catch (err) {
+    state.trading = null;
+  }
+  renderTrading();
+}
+
+function renderTrading() {
+  const data = state.trading;
+  const halted = !!data?.halted;
+  const kill = data?.kill_switch || {};
+
+  const button = $("kill-btn");
+  if (data === null) {
+    button.textContent = "TRADING —";
+    button.disabled = true;
+    button.className = "bg-surface-container text-on-surface-variant/40 border border-outline-variant/40 px-4 py-1.5 rounded font-label-caps text-label-caps tracking-wide cursor-not-allowed";
+  } else {
+    button.disabled = false;
+    button.textContent = halted ? "RESUME TRADING" : "PAUSE TRADING";
+    button.className = halted
+      ? "bg-tertiary-container/20 text-tertiary-fixed-dim border border-tertiary-container/40 px-4 py-1.5 rounded font-label-caps text-label-caps tracking-wide hover:bg-tertiary-container/30 transition-colors"
+      : "bg-surface-container text-on-surface-variant border border-outline-variant/40 px-4 py-1.5 rounded font-label-caps text-label-caps tracking-wide hover:text-on-surface transition-colors";
+  }
+
+  if (!$("ks-state")) return;
+
+  const stateChip = $("engine-state");
+  stateChip.textContent = data === null ? "UNKNOWN"
+    : halted ? "HALTED" : data.engine_enabled ? "ARMED · PAPER" : "DISABLED";
+  stateChip.className = "font-label-caps text-label-caps px-2 py-1 rounded border " + (
+    data === null ? "border-outline-variant/40 text-on-surface-variant/50"
+      : halted ? "border-tertiary-container/50 text-tertiary-fixed-dim"
+      : data.engine_enabled ? "border-secondary-container/50 text-secondary-fixed-dim"
+      : "border-outline-variant/40 text-on-surface-variant");
+
+  $("ks-state").textContent = data === null ? "—" : halted ? "발동" : "해제";
+  $("ks-state").className = "font-data-mono text-lg font-bold " +
+    (halted ? "text-tertiary-fixed-dim" : "text-on-surface");
+  $("ks-detail").textContent = halted
+    ? [kill.engaged_at ? fmtStamp(kill.engaged_at) : "시각 불명",
+       kill.engaged_at_source === "mtime" ? "(파일 수정시각)" : "",
+       kill.actor ? `· ${kill.actor}` : "",
+       kill.reason ? `· ${kill.reason}` : ""].filter(Boolean).join(" ")
+    : kill.path || "—";
+
+  $("engine-enabled").textContent = data === null ? "—" : data.engine_enabled ? "활성" : "비활성";
+  $("engine-strategies").textContent = (data?.strategies || []).length
+    ? data.strategies.join(", ") : "등록된 전략 없음";
+  $("engine-mode").textContent = data === null ? "—" : (data.mode || "paper").toUpperCase();
+
+  const toggle = $("ks-toggle");
+  toggle.disabled = data === null;
+  toggle.textContent = halted ? "킬 스위치 해제" : "킬 스위치 발동";
+  toggle.className = "px-4 py-2 rounded font-label-caps text-label-caps tracking-wide border transition-colors " + (
+    halted ? "border-secondary-container/50 text-secondary-fixed-dim hover:bg-secondary-container/10"
+           : "border-tertiary-container/50 text-tertiary-fixed-dim hover:bg-tertiary-container/10");
+  $("ks-reason").disabled = halted;
+}
+
+// Engaging needs no confirmation - stopping is always the safe direction, and
+// a stop control that argues with you is a broken stop control. Releasing
+// does, because that one starts the engine again.
+async function toggleKillSwitch(reason) {
+  const halted = !!state.trading?.halted;
+  if (halted && !window.confirm("킬 스위치를 해제하고 자동매매 발주를 재개합니다. 계속할까요?")) return;
+  const response = await fetch("/api/trading/kill-switch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active: !halted, reason: reason || null }),
+  });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  state.trading = await response.json();
+  renderTrading();
+  const input = $("ks-reason");
+  if (input) input.value = "";
+  loadOverview().catch(() => {});
+  if (state.view === "audit") loadAudit().catch(() => {});
 }
 
 /* ------------------------------------------------------------------ init */
@@ -571,7 +721,7 @@ function styleRangeButtons() {
 
 const AUDIT_LABELS = {
   baseline: "기준선", universe: "유니버스", strategies: "전략 목록", strategy_params: "전략 파라미터",
-  limits: "리스크 한도", veto: "AI 보류", candidate: "AI 제안",
+  limits: "리스크 한도", veto: "AI 보류", candidate: "AI 제안", kill_switch: "킬 스위치",
 };
 
 // How the change time was recovered decides how much it can be trusted, so
@@ -705,6 +855,16 @@ function init() {
     });
   });
   $("alert-bell").addEventListener("click", () => setView("overview"));
+  const toggleKill = () => {
+    const input = $("ks-reason");
+    toggleKillSwitch(input && !input.disabled ? input.value.trim() : "")
+      .catch((err) => showError(String(err)));
+  };
+  // The header button is the emergency stop: one click, no dialog, no reason
+  // required. Making someone type a justification first is exactly the wrong
+  // trade when the reason to stop is that something is going wrong.
+  $("kill-btn").addEventListener("click", toggleKill);
+  $("ks-toggle").addEventListener("click", toggleKill);
   document.querySelectorAll(".audit-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       state.auditCategory = tab.dataset.category || "";
@@ -733,6 +893,7 @@ function init() {
   const refresh = () => {
     loadOverview().catch((err) => showError(String(err)));
     loadHealth();
+    loadTrading();
     if (state.view === "holdings") loadHoldings().catch(() => {});
   };
 
