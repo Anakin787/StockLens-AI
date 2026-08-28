@@ -334,3 +334,38 @@ def test_rotation_can_actually_be_turned_off():
         )
     )
     assert not [s for s in off.evaluate(ctx) if s.side == SIDE_SELL]
+
+
+def test_a_displaced_incumbent_is_sold_not_merely_starved():
+    """Taking the slot has to mean taking the money.
+
+    Otherwise the margin is not a rotation rule: the displaced name stops
+    receiving cash but keeps its shares, so each displacement *adds* a name
+    instead of replacing one and the slot count stops being a ceiling.
+    """
+    fields = {f.name: getattr(SMALL, f.name) for f in SMALL.__dataclass_fields__.values()}
+    params = BucketDcaParams(**fields | {"prefer_incumbents": True, "incumbent_margin": D("0.01")})
+    # CCC and DDD hold both CORE slots; AAA and BBB are far stronger. The
+    # weakest incumbent (DDD) loses its slot to the best challenger - one
+    # swap per evaluation, so CCC keeps its place this week.
+    history = history_for({"AAA": "0.05", "BBB": "0.04", "CCC": "0.001", "DDD": "0.0005"})
+    ctx = context(
+        datetime(2025, 3, 3, 10),
+        history,
+        positions=[position("CCC", quantity="10"), position("DDD", quantity="10")],
+    )
+    sells = {s.symbol for s in strategy(params).evaluate(ctx) if s.side == SIDE_SELL}
+    assert sells == {"DDD"}
+
+
+def test_strict_incumbency_never_displaces_so_nothing_is_sold_for_it():
+    fields = {f.name: getattr(SMALL, f.name) for f in SMALL.__dataclass_fields__.values()}
+    params = BucketDcaParams(**fields | {"prefer_incumbents": True, "incumbent_margin": None})
+    history = history_for({"AAA": "0.05", "BBB": "0.04", "CCC": "0.001", "DDD": "0.0005"})
+    ctx = context(
+        datetime(2025, 3, 3, 10),
+        history,
+        positions=[position("CCC", quantity="10"), position("DDD", quantity="10")],
+    )
+    sells = {s.symbol for s in strategy(params).evaluate(ctx) if s.side == SIDE_SELL}
+    assert not sells

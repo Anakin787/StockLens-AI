@@ -524,17 +524,39 @@ class BucketDcaStrategy(MomentumDcaStrategy):
         if not p.rotation_enabled:
             return
         slots = p.slots
+        # A challenger that took an incumbent's slot has to take its money
+        # too. Without this the margin is not a rotation rule at all: the
+        # displaced name stops receiving cash but keeps its shares, so every
+        # displacement adds a name to the roster instead of replacing one -
+        # measured, a 9-name plan drifted to 15-17 as soon as a margin was
+        # set. Only meaningful with a margin: under strict incumbency a
+        # ranked incumbent is never displaced in the first place.
+        displaced = set()
+        if p.prefer_incumbents and p.incumbent_margin is not None:
+            selected = self._selected(ranked, p, ctx)
+            for bucket, rows in ranked.items():
+                if bucket == BUCKET_SAFE:
+                    continue
+                chosen = {i.symbol for i, _ in selected.get(bucket, ())}
+                for instrument, _ in rows:
+                    symbol = instrument.symbol
+                    if symbol in chosen:
+                        continue
+                    position = ctx.positions.get(symbol)
+                    if position is not None and position.quantity > ZERO:
+                        displaced.add(symbol)
+
         for bucket, rows in ranked.items():
             if bucket == BUCKET_SAFE:
                 continue
             ranked_symbols = {instrument.symbol for instrument, _ in rows}
             if p.require_absolute_exit:
-                keep = ranked_symbols
+                keep = ranked_symbols - displaced
             else:
                 keep = {
                     instrument.symbol
                     for instrument, _ in rows[: slots.get(bucket, 0) + p.rotation_buffer]
-                }
+                } - displaced
             for instrument in self.universe.by_bucket(bucket):
                 symbol = instrument.symbol
                 if symbol in keep:
