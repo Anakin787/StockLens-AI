@@ -586,6 +586,74 @@ def build_round_four():
     return groups
 
 
+def build_mdd40():
+    """Maximise return under the constraint the account owner actually gave.
+
+    Safe assets fixed at 20%, drawdown allowed to 40%, holding count free.
+    That last freedom matters: every earlier table held the slot count near
+    ten because that was the stated shape, and the slot count turned out to
+    be the main lever on concentration - and therefore on both return and
+    drawdown. With the ceiling raised to 40% the question stops being "how do
+    we keep drawdown near 20" and becomes "what is the most return available
+    at 40, and does anything stay under it in every window".
+
+    The binding window is 2014: it holds the largest drawdown in almost every
+    configuration measured, so a row that clears 40% there clears it
+    everywhere.
+    """
+    groups = []
+
+    groups.append((
+        "25. 낙폭 40% 예산 · 무매도 계열",
+        "안전 20% 고정. 매도를 하지 않는 쪽에서 수익이 가장 높았으므로 거기서 "
+        "출발해, 낙폭 40%를 넘기는 설정을 방어 장치로 끌어내립니다.",
+        [
+            ("무매도 + 변동성조정 끔 (기준)", base_params(
+                rotation_enabled=False, vol_adjust=False)),
+            ("+ 추세이탈 매도 허용", base_params(
+                vol_adjust=False, exit_requires_trend_break=True)),
+            ("+ 추세필터 150일", base_params(
+                rotation_enabled=False, vol_adjust=False, trend_sma=150)),
+            ("+ 못 채운 몫 SAFE로", base_params(
+                rotation_enabled=False, vol_adjust=False,
+                unfilled_weight_to=BUCKET_SAFE)),
+            ("무매도 + 변동성조정 켬", base_params(rotation_enabled=False)),
+        ],
+    ))
+
+    groups.append((
+        "26. 낙폭 40% 예산 · 종목 수를 풀었을 때",
+        "종목 수 상한이 없어졌으므로 슬롯을 넓게 훑습니다. 슬롯이 적을수록 집중되고, "
+        "집중될수록 수익과 낙폭이 함께 오릅니다 — 40% 예산을 어디서 다 쓰는지.",
+        [
+            (f"무매도 · 변동성조정 끔 · CORE {n}", base_params(
+                rotation_enabled=False, vol_adjust=False, bucket_slots=slots(core=n)))
+            for n in (2, 3, 4, 6, 10, 14, 20)
+        ],
+    ))
+
+    groups.append((
+        "27. 낙폭 40% 예산 · 매도하는 계열",
+        "매도는 연 5~8%p를 깎지만 낙폭도 함께 낮춥니다. 40% 예산 안에서 그 교환이 "
+        "값어치가 있는지.",
+        [
+            ("변동성조정 끔 + 추세이탈 동시", base_params(
+                vol_adjust=False, exit_requires_trend_break=True)),
+            ("+ 추세필터 150일", base_params(
+                vol_adjust=False, exit_requires_trend_break=True, trend_sma=150)),
+            ("+ CORE 3슬롯", base_params(
+                vol_adjust=False, exit_requires_trend_break=True,
+                bucket_slots=slots(core=3))),
+            ("+ CORE 10슬롯", base_params(
+                vol_adjust=False, exit_requires_trend_break=True,
+                bucket_slots=slots(core=10))),
+            ("(참고) momentum-dca", MomentumDcaStrategy()),
+        ],
+    ))
+
+    return groups
+
+
 def build_finalists():
     """The three surviving configurations, head to head.
 
@@ -727,6 +795,9 @@ def main(argv=None):
         "--finalists", action="store_true", help="최종 3안 head-to-head"
     )
     parser.add_argument(
+        "--mdd40", action="store_true", help="낙폭 40% 예산 안에서 수익 최대화"
+    )
+    parser.add_argument(
         "--contribution", type=int, default=CONTRIBUTION_KRW, help="월 적립액(원)"
     )
     args = parser.parse_args(argv)
@@ -740,7 +811,9 @@ def main(argv=None):
     if not args.group:
         write_benchmarks(lab, starts)
 
-    if args.finalists:
+    if args.mdd40:
+        groups = build_mdd40()
+    elif args.finalists:
         groups = build_finalists()
     elif args.round_four:
         groups = build_round_four()
