@@ -139,7 +139,7 @@ class BucketDcaParams:
     #: than slots - most often GROWTH, which is short by design. Left as cash
     #: it would be a permanent drag; pushed into GROWTH it would concentrate
     #: the one bucket whose names are least proven.
-    unfilled_weight_to: str = BUCKET_CORE
+    unfilled_weight_to: str = BUCKET_SAFE
 
     # --- ranking (see momentum_dca for the reasoning) ---
     lookbacks: tuple = ((63, Decimal("0.5")), (126, Decimal("0.3")), (252, Decimal("0.2")))
@@ -150,7 +150,7 @@ class BucketDcaParams:
 
     # --- trend filter (the leverage gate) ---
     benchmark: str = "QQQ"
-    trend_sma: int = 200
+    trend_sma: int = 150
     leverage_requires_trend: bool = True
     leverage_max_vol: Decimal = Decimal("0.35")
     exit_cooldown_days: int = 3
@@ -184,7 +184,12 @@ class BucketDcaParams:
     #: whole account onto one week's prices - while scaling with the account,
     #: so redeploying what was just sold is never the thing it throttles.
     #: ``None`` disables it and leaves only the fixed cap below.
-    max_deploy_per_week_pct: Decimal | None = Decimal("0.05")
+    #: 20% is where the curve flattens: 15, 20, 30 and no cap at all return
+    #: within a tenth of a point of each other, while 5% gives up 1.5 points a
+    #: year. The number is kept finite rather than removed because the cap's
+    #: original point - do not re-price the account onto one week's prices -
+    #: is still worth something at no measured cost.
+    max_deploy_per_week_pct: Decimal | None = Decimal("0.20")
     #: Fixed floor under the percentage cap, so a small account can still put
     #: a month's contribution to work. ``None`` removes it.
     max_deploy_per_week_usd: Decimal | None = Decimal("700")
@@ -197,7 +202,7 @@ class BucketDcaParams:
     #: Also require the name to be below its own trend line before selling.
     #: A slower, more persistent condition than the score alone, standing in
     #: for "has been failing for a while" without needing stored state.
-    exit_requires_trend_break: bool = False
+    exit_requires_trend_break: bool = True
     #: Fraction of a position sold when it does leave. Below 1 this trims
     #: rather than exits, which realises less gain per decision.
     exit_fraction: Decimal = Decimal("1")

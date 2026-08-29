@@ -90,9 +90,16 @@ UNIVERSE = Universe(
     )
 )
 
+#: Pinned, not inherited. Several tests below assert on where an unfilled
+#: bucket's weight lands and on whether a displaced name is sold, and both
+#: are configurable - so leaving them at whatever the defaults happen to be
+#: would let a default change silently rewrite what the test means rather
+#: than fail it.
 SMALL = BucketDcaParams(
     bucket_weights=((BUCKET_SAFE, D("0.2")), (BUCKET_CORE, D("0.6")), (BUCKET_GROWTH, D("0.2"))),
     bucket_slots=((BUCKET_SAFE, 2), (BUCKET_CORE, 2), (BUCKET_GROWTH, 1)),
+    unfilled_weight_to=BUCKET_CORE,
+    exit_requires_trend_break=False,
     rotation_buffer=1,
     lookbacks=((10, D("1")),),
     skip_days=0,

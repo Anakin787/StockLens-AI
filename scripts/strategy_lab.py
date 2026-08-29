@@ -713,6 +713,69 @@ def build_ratio():
     return groups
 
 
+def build_refine():
+    """Close in on the leader: A with the weekly cap opened up.
+
+    Raising the deployment cap from 5% to 20% of equity lifted return in all
+    five windows for about a point of drawdown - the cap was still throttling
+    even after it stopped being a fixed dollar figure. Where that stops being
+    true is the remaining question, along with whether the holdings count and
+    the trend filter want re-picking now that the cap has moved.
+    """
+    A20 = dict(
+        exit_requires_trend_break=True,
+        unfilled_weight_to=BUCKET_SAFE,
+        trend_sma=150,
+        max_deploy_per_week_pct=D("0.20"),
+    )
+    groups = []
+
+    groups.append((
+        "31. 배포 상한의 무릎",
+        "5% → 20%가 공짜에 가까웠습니다. 어디까지 열어도 낙폭이 안 오르는지.",
+        [
+            ("A + 상한 5% (기존 기본값)", base_params(
+                exit_requires_trend_break=True, unfilled_weight_to=BUCKET_SAFE,
+                trend_sma=150)),
+            ("A + 상한 15%", base_params(
+                exit_requires_trend_break=True, unfilled_weight_to=BUCKET_SAFE,
+                trend_sma=150, max_deploy_per_week_pct=D("0.15"))),
+            ("A + 상한 20%", base_params(**A20)),
+            ("A + 상한 30%", base_params(
+                exit_requires_trend_break=True, unfilled_weight_to=BUCKET_SAFE,
+                trend_sma=150, max_deploy_per_week_pct=D("0.30"))),
+            ("A + 상한 50%", base_params(
+                exit_requires_trend_break=True, unfilled_weight_to=BUCKET_SAFE,
+                trend_sma=150, max_deploy_per_week_pct=D("0.50"))),
+            ("A + 상한 없음", base_params(
+                exit_requires_trend_break=True, unfilled_weight_to=BUCKET_SAFE,
+                trend_sma=150, max_deploy_per_week_pct=None,
+                max_deploy_per_week_usd=None)),
+        ],
+    ))
+
+    groups.append((
+        "32. 상한 20% 위에서 나머지 축 재확인",
+        "상한이 움직였으니 종목 수와 추세필터도 다시 골라야 할 수 있습니다.",
+        [
+            ("A20 (기준)", base_params(**A20)),
+            ("A20 + CORE 8", base_params(**A20, bucket_slots=slots(core=8))),
+            ("A20 + CORE 10", base_params(**A20, bucket_slots=slots(core=10))),
+            ("A20 + 추세필터 200일", base_params(
+                exit_requires_trend_break=True, unfilled_weight_to=BUCKET_SAFE,
+                trend_sma=200, max_deploy_per_week_pct=D("0.20"))),
+            ("A20 + 못 채운 몫 CORE로", base_params(
+                exit_requires_trend_break=True, trend_sma=150,
+                max_deploy_per_week_pct=D("0.20"))),
+            ("A20 + 추세이탈 조건 끔", base_params(
+                unfilled_weight_to=BUCKET_SAFE, trend_sma=150,
+                max_deploy_per_week_pct=D("0.20"))),
+        ],
+    ))
+
+    return groups
+
+
 def build_finalists():
     """The three surviving configurations, head to head.
 
@@ -859,6 +922,7 @@ def main(argv=None):
     parser.add_argument(
         "--ratio", action="store_true", help="낙폭당 수익 최대화 (권장 목적함수)"
     )
+    parser.add_argument("--refine", action="store_true", help="선두 설정 주변 정밀 탐색")
     parser.add_argument(
         "--contribution", type=int, default=CONTRIBUTION_KRW, help="월 적립액(원)"
     )
@@ -873,7 +937,9 @@ def main(argv=None):
     if not args.group:
         write_benchmarks(lab, starts)
 
-    if args.ratio:
+    if args.refine:
+        groups = build_refine()
+    elif args.ratio:
         groups = build_ratio()
     elif args.mdd40:
         groups = build_mdd40()
