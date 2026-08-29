@@ -654,6 +654,65 @@ def build_mdd40():
     return groups
 
 
+def build_ratio():
+    """Most return per unit of drawdown, not most return under a ceiling.
+
+    The 40% figure is what the account owner can survive at worst, not a
+    budget to spend down: 30% return at 20% drawdown beats 40% at 40%, and
+    paying twenty points of drawdown for ten of return is a bad trade at any
+    ceiling. So the search runs around the configuration that currently wins
+    on that ratio - the defensive combination - rather than around the ones
+    that merely returned most.
+    """
+    A = dict(
+        exit_requires_trend_break=True,
+        unfilled_weight_to=BUCKET_SAFE,
+        trend_sma=150,
+    )
+    groups = []
+
+    groups.append((
+        "28. 낙폭당 수익 · 종목 수 축",
+        "A(방어 조합)를 기준으로 슬롯을 넓게 훑습니다. 종목 수 상한이 풀렸으므로 "
+        "집중과 분산 어느 쪽이 낙폭당 수익을 높이는지.",
+        [(f"A + CORE {n}", base_params(**A, bucket_slots=slots(core=n)))
+         for n in (2, 3, 4, 6, 8, 10, 14)],
+    ))
+
+    groups.append((
+        "29. 낙폭당 수익 · 매도와 점수 축",
+        "A에서 한 축씩만 바꿉니다. 낙폭을 20%대로 유지하면서 수익을 더 낼 여지가 "
+        "있는지.",
+        [
+            ("A (기준)", base_params(**A)),
+            ("A + 교체매도 끔", base_params(**A, rotation_enabled=False)),
+            ("A + 변동성조정 끔", base_params(**A, vol_adjust=False)),
+            ("A + 점유 없음", base_params(**A, prefer_incumbents=False)),
+            ("A + 상한 10%", base_params(**A, max_deploy_per_week_pct=D("0.10"))),
+            ("A + 상한 20%", base_params(**A, max_deploy_per_week_pct=D("0.20"))),
+            ("A + min_score 0.15", base_params(**A, min_score=D("0.15"))),
+        ],
+    ))
+
+    groups.append((
+        "30. 낙폭당 수익 · 방어를 더 얹으면",
+        "A보다 낙폭을 더 낮출 수 있는지, 그리고 그만큼 수익이 깎이는지.",
+        [
+            ("A (기준)", base_params(**A)),
+            ("A + 추세필터 100일", base_params(
+                exit_requires_trend_break=True,
+                unfilled_weight_to=BUCKET_SAFE, trend_sma=100)),
+            ("A + 추세필터 200일", base_params(
+                exit_requires_trend_break=True,
+                unfilled_weight_to=BUCKET_SAFE, trend_sma=200)),
+            ("A + 부분매도 70%", base_params(**A, exit_fraction=D("0.7"))),
+            ("A + 리밸런스 금요일", base_params(**A, rebalance_weekday=4)),
+        ],
+    ))
+
+    return groups
+
+
 def build_finalists():
     """The three surviving configurations, head to head.
 
@@ -798,6 +857,9 @@ def main(argv=None):
         "--mdd40", action="store_true", help="낙폭 40% 예산 안에서 수익 최대화"
     )
     parser.add_argument(
+        "--ratio", action="store_true", help="낙폭당 수익 최대화 (권장 목적함수)"
+    )
+    parser.add_argument(
         "--contribution", type=int, default=CONTRIBUTION_KRW, help="월 적립액(원)"
     )
     args = parser.parse_args(argv)
@@ -811,7 +873,9 @@ def main(argv=None):
     if not args.group:
         write_benchmarks(lab, starts)
 
-    if args.mdd40:
+    if args.ratio:
+        groups = build_ratio()
+    elif args.mdd40:
         groups = build_mdd40()
     elif args.finalists:
         groups = build_finalists()
