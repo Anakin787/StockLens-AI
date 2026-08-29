@@ -111,7 +111,21 @@ trading:
   # 직접 작성한 전략을 module:Class 로 지정합니다. Strategy를 상속해야 하고,
   # evaluate(ctx) -> list[Signal] 안에서 I/O를 하면 안 됩니다 — 그 순수성이
   # 백테스트의 전제입니다.
+  # 둘 다 같은 모멘텀 점수를 쓰지만 그것으로 하는 일이 다릅니다. 495회 백테스트의
+  # 근거는 docs/STRATEGY_FINDINGS.md, 원본 표는 docs/STRATEGY_LAB.md 에 있습니다.
+  #
+  #   bucket_dca   — 안전/일반/성장 버킷에 목표 비중을 두고 9종목을 유지합니다.
+  #                  보유 종목이 모멘텀을 잃고 자기 추세선까지 이탈했을 때만 팝니다.
+  #                  평균 수익 27.7% / 최악 낙폭 21.3% (5개 시작연도, 2014~2022)
+  #
+  #   momentum_dca — 매주 상위 2종목에 새 돈을 몰아넣고 1배 포지션은 팔지 않습니다.
+  #                  평균 수익 38.1% / 최악 낙폭 42.8%
+  #
+  # 수익만 보면 momentum_dca가 앞서지만 낙폭이 두 배입니다. 어느 쪽이 맞는지는
+  # "얼마나 깨지는 것을 버틸 수 있는가"의 문제이지 백테스트가 답할 수 있는
+  # 질문이 아닙니다 — 버티지 못하고 파는 순간 어느 쪽의 수익률도 남지 않습니다.
   strategies: []
+  # - src.strategy.bucket_dca:BucketDcaStrategy
   # - src.strategy.momentum_dca:MomentumDcaStrategy
 
   limits:
