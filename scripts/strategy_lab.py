@@ -75,7 +75,7 @@ def _fmt_krw(value):
 
 
 class Lab:
-    def __init__(self, out_path, offline=True):
+    def __init__(self, out_path, offline=True, contribution_krw=None):
         self.out_path = out_path
         cfg = load_config()
         self.limits = {
@@ -84,7 +84,7 @@ class Lab:
             "strict": False,
         }
         self.schedule = ContributionSchedule(
-            amount_krw=D(CONTRIBUTION_KRW), day_of_month=1
+            amount_krw=D(contribution_krw or CONTRIBUTION_KRW), day_of_month=1
         )
         loader = HistoryLoader(BarCache(), source=None, offline=offline)
         symbols = sorted(set(DEFAULT_UNIVERSE.symbols()) | {BENCHMARK})
@@ -523,6 +523,100 @@ def build_round_three():
     return groups
 
 
+def build_round_four():
+    """The middle ground between shape and return.
+
+    Turning rotation off wins by 5-8 points a year but lets the roster drift
+    to nineteen names. The roster only grows when a held name drops out of
+    the ranking and a challenger takes the freed slot, so fewer slots should
+    mean slower drift - the question is whether a no-sell portfolio can be
+    held near ten names by construction rather than by selling.
+    """
+    groups = []
+
+    groups.append((
+        "21. 4차: 안 팔면서 종목 수 묶기",
+        "교체 매도를 끈 채로 슬롯을 줄이면 종목이 덜 늘어납니다. 상한과 수익을 "
+        "얼마나 함께 가질 수 있는지.",
+        [
+            ("교체 매도 끔 · CORE 6 (기준)", base_params(rotation_enabled=False)),
+            ("교체 매도 끔 · CORE 4", base_params(
+                rotation_enabled=False, bucket_slots=slots(core=4))),
+            ("교체 매도 끔 · CORE 3", base_params(
+                rotation_enabled=False, bucket_slots=slots(core=3))),
+            ("교체 매도 끔 · CORE 2", base_params(
+                rotation_enabled=False, bucket_slots=slots(core=2))),
+            ("교체 매도 켬 · CORE 6 (현재 기본값)", base_params()),
+        ],
+    ))
+
+    groups.append((
+        "22. 4차: 안 팔면서 낙폭 줄이기",
+        "무매도의 약점은 낙폭(2014년 33.68%)입니다. 방어 설정으로 되돌릴 수 있는지.",
+        [
+            ("교체 매도 끔 (기준)", base_params(rotation_enabled=False)),
+            ("끔 + 못 채운 몫 SAFE로", base_params(
+                rotation_enabled=False, unfilled_weight_to=BUCKET_SAFE)),
+            ("끔 + 안전 30%", base_params(
+                rotation_enabled=False, bucket_weights=weights("0.30", "0.50", "0.20"))),
+            ("끔 + 안전 40%", base_params(
+                rotation_enabled=False, bucket_weights=weights("0.40", "0.40", "0.20"))),
+            ("끔 + 안전 30% + 못 채운 몫 SAFE로", base_params(
+                rotation_enabled=False, unfilled_weight_to=BUCKET_SAFE,
+                bucket_weights=weights("0.30", "0.50", "0.20"))),
+        ],
+    ))
+
+    groups.append((
+        "23. 4차: 안 팔면서 수익 더 내기",
+        "무매도에 변동성 조정 끔을 얹으면. 두 설정 모두 수익을 크게 올렸는데 "
+        "함께 걸면 낙폭이 감당 가능한지.",
+        [
+            ("교체 매도 끔 (기준)", base_params(rotation_enabled=False)),
+            ("끔 + 변동성 조정 끔", base_params(rotation_enabled=False, vol_adjust=False)),
+            ("끔 + 변동성 조정 끔 + 안전 30%", base_params(
+                rotation_enabled=False, vol_adjust=False,
+                bucket_weights=weights("0.30", "0.50", "0.20"))),
+            ("끔 + 변동성 조정 끔 + 안전 40%", base_params(
+                rotation_enabled=False, vol_adjust=False,
+                bucket_weights=weights("0.40", "0.40", "0.20"))),
+        ],
+    ))
+
+    return groups
+
+
+def build_finalists():
+    """The three surviving configurations, head to head.
+
+    Everything else in this file compares one knob against a default. These
+    are the three whole answers, and the only remaining question about them
+    is whether their order holds up when the money going in changes size -
+    the deployment cap is a share of equity, so contribution size and cap
+    interact, and a ranking that flips at a different deposit is a ranking
+    that was measuring the deposit.
+    """
+    return [(
+        "24. 최종 3안 head-to-head",
+        "A 보수 / B 균형 / C 공격. 적립금 규모를 바꿔가며 순위가 유지되는지.",
+        [
+            ("A 보수 (방어 조합 셋)", base_params(
+                exit_requires_trend_break=True,
+                unfilled_weight_to=BUCKET_SAFE,
+                trend_sma=150)),
+            ("B 균형 (무매도 + 안전 30)", base_params(
+                rotation_enabled=False,
+                unfilled_weight_to=BUCKET_SAFE,
+                bucket_weights=weights("0.30", "0.50", "0.20"))),
+            ("C 공격 (무매도 + 변동성조정 끔 + 안전 40)", base_params(
+                rotation_enabled=False, vol_adjust=False,
+                bucket_weights=weights("0.40", "0.40", "0.20"))),
+            ("(참고) 현재 기본값", base_params()),
+            ("(참고) momentum-dca", MomentumDcaStrategy()),
+        ],
+    )]
+
+
 # ----------------------------------------------------------------- report
 
 
@@ -626,15 +720,31 @@ def main(argv=None):
     parser.add_argument(
         "--round-three", action="store_true", help="3차 조합 묶음만 돌립니다"
     )
+    parser.add_argument(
+        "--round-four", action="store_true", help="4차 (무매도 변형) 묶음만 돌립니다"
+    )
+    parser.add_argument(
+        "--finalists", action="store_true", help="최종 3안 head-to-head"
+    )
+    parser.add_argument(
+        "--contribution", type=int, default=CONTRIBUTION_KRW, help="월 적립액(원)"
+    )
     args = parser.parse_args(argv)
 
     starts = {k: STARTS[k] for k in args.starts.split(",") if k in STARTS}
-    lab = Lab(args.out)
+    lab = Lab(args.out, contribution_krw=args.contribution)
+    if args.contribution != CONTRIBUTION_KRW:
+        lab.write("")
+        lab.write(f"> 월 적립액 {args.contribution:,}원으로 실행한 표입니다.")
 
     if not args.group:
         write_benchmarks(lab, starts)
 
-    if args.round_three:
+    if args.finalists:
+        groups = build_finalists()
+    elif args.round_four:
+        groups = build_round_four()
+    elif args.round_three:
         groups = build_round_three()
     elif args.round_two:
         groups = build_round_two()

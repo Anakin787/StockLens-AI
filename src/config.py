@@ -480,6 +480,11 @@ def _parse_trading(raw_trading):
 
 
 #: Where the Firebase service account lives when nothing says otherwise.
+#: Written with a forward slash and split on use, so the path this builds
+#: carries the running platform's separator throughout. Joining the whole
+#: string produced ``C:\\repo\\secrets/firebase-...`` on Windows - openable,
+#: but a path that matches neither what the user typed nor what any other
+#: tool would print, which is a poor thing to put in an error message.
 DEFAULT_SERVICE_ACCOUNT = "secrets/firebase-service-account.json"
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -518,7 +523,7 @@ def resolve_service_account(value=None, root=None):
     if value:
         candidates.extend(_translate_path(str(value)))
         candidates.append(os.path.join(root, os.path.basename(str(value))))
-    candidates.append(os.path.join(root, DEFAULT_SERVICE_ACCOUNT))
+    candidates.append(os.path.join(root, *DEFAULT_SERVICE_ACCOUNT.split("/")))
     for candidate in candidates:
         if candidate and os.path.isfile(candidate):
             return candidate
