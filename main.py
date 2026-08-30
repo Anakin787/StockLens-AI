@@ -21,9 +21,38 @@ from src.news import NewsFetcher, portfolio_keywords
 from src.notion import NotionReporter
 from src.pipeline import PortfolioService, apply_name_overrides
 from src.store.repo import Store
+from src.strategy.loader import load_strategies
 from src.strategy.universe import parse_universe
 from src.toss.errors import TossError
 from src.universe_review import UniverseReviewer
+
+
+def _bucket_allocation(config, snapshot):
+    """Where the portfolio sits against the active strategy's bucket plan.
+
+    Returns None when the strategy has no buckets - momentum_dca has no such
+    plan, and printing a table of empty targets next to it would invent one.
+    Never raises: a report that fails because an extra section could not be
+    built is worse than a report without that section.
+    """
+    try:
+        strategies = load_strategies(config.trading)
+        targets = next(
+            (
+                s.params.weights
+                for s in strategies
+                if isinstance(getattr(getattr(s, "params", None), "weights", None), dict)
+            ),
+            None,
+        )
+        if not targets:
+            return None
+        return parse_universe(config.trading.universe).bucket_allocation(
+            snapshot, targets=targets
+        )
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        print(f"경고: 버킷 배분을 계산하지 못했습니다 ({exc})")
+        return None
 
 
 def _review_universe(config, snapshot, news_data, store):
@@ -137,7 +166,11 @@ def run():
 
     print(">>> Reporting to Notion...")
     report = NotionReporter(config).create_report(
-        snapshot, news_data, ai_comment, universe_review=review
+        snapshot,
+        news_data,
+        ai_comment,
+        universe_review=review,
+        bucket_allocation=_bucket_allocation(config, snapshot),
     )
     if report.get("page_id"):
         store.save_report(

@@ -137,3 +137,86 @@ def test_default_universe_has_no_3x_and_no_single_stock_leverage():
         if fund.is_leveraged:
             assert fund.kind != KIND_SINGLE_STOCK_ETF
             assert fund.underlying is None
+
+
+# ------------------------------------------------------- bucket allocation
+
+
+def _snap(positions, rate="1000"):
+    from decimal import Decimal
+    from src.models import PortfolioSnapshot
+
+    return PortfolioSnapshot(
+        positions=list(positions), exchange_rate=Decimal(rate), total_krw=Decimal("0")
+    )
+
+
+def _pos(symbol, quantity, price, currency="USD"):
+    from decimal import Decimal
+    from src.models import SOURCE_TOSS, Position
+
+    return Position(
+        symbol=symbol,
+        name=symbol,
+        market_country="US" if currency == "USD" else "KR",
+        currency=currency,
+        quantity=Decimal(str(quantity)),
+        last_price=Decimal(str(price)),
+        avg_purchase_price=Decimal(str(price)),
+        source=SOURCE_TOSS,
+    )
+
+
+def test_bucket_allocation_reports_share_against_target():
+    from decimal import Decimal
+    from src.strategy.universe import BUCKET_CORE, BUCKET_SAFE
+
+    universe = Universe(
+        (
+            Instrument("SHY", "T", kind=KIND_INDEX_ETF, bucket=BUCKET_SAFE),
+            Instrument("AAA", "A", kind=KIND_STOCK, bucket=BUCKET_CORE),
+        )
+    )
+    snapshot = _snap([_pos("SHY", 2, 100), _pos("AAA", 8, 100)])  # 20% / 80%
+    alloc = universe.bucket_allocation(
+        snapshot, targets={BUCKET_SAFE: Decimal("0.2"), BUCKET_CORE: Decimal("0.6")}
+    )
+
+    assert alloc[BUCKET_SAFE]["share"] == Decimal("0.2")
+    assert alloc[BUCKET_SAFE]["target"] == Decimal("0.2")
+    assert alloc[BUCKET_CORE]["share"] == Decimal("0.8")
+
+
+def test_holdings_outside_the_universe_are_unmanaged_not_miscounted():
+    """They are real money and belong in the denominator, with no target."""
+    from decimal import Decimal
+    from src.strategy.universe import BUCKET_CORE, UNMANAGED
+
+    universe = Universe((Instrument("AAA", "A", kind=KIND_STOCK, bucket=BUCKET_CORE),))
+    snapshot = _snap([_pos("AAA", 5, 100), _pos("TSLL", 5, 100)])
+    alloc = universe.bucket_allocation(snapshot, targets={BUCKET_CORE: Decimal("0.6")})
+
+    assert alloc[UNMANAGED]["share"] == Decimal("0.5")
+    assert alloc[UNMANAGED]["target"] is None
+    assert alloc[UNMANAGED]["symbols"] == ["TSLL"]
+
+
+def test_a_bucket_with_a_target_and_no_holdings_still_appears():
+    """A safe bucket that has drifted to zero is the case worth seeing."""
+    from decimal import Decimal
+    from src.strategy.universe import BUCKET_CORE, BUCKET_SAFE
+
+    universe = Universe(
+        (
+            Instrument("SHY", "T", kind=KIND_INDEX_ETF, bucket=BUCKET_SAFE),
+            Instrument("AAA", "A", kind=KIND_STOCK, bucket=BUCKET_CORE),
+        )
+    )
+    snapshot = _snap([_pos("AAA", 5, 100)])
+    alloc = universe.bucket_allocation(
+        snapshot, targets={BUCKET_SAFE: Decimal("0.2"), BUCKET_CORE: Decimal("0.6")}
+    )
+
+    assert BUCKET_SAFE in alloc
+    assert alloc[BUCKET_SAFE]["share"] == Decimal("0")
+    assert alloc[BUCKET_SAFE]["target"] == Decimal("0.2")

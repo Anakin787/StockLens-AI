@@ -2,6 +2,14 @@ import re
 from datetime import datetime
 from decimal import Decimal
 
+from src.models import ZERO
+from src.strategy.universe import (
+    BUCKET_CORE,
+    BUCKET_GROWTH,
+    BUCKET_SAFE,
+    UNMANAGED,
+)
+
 from notion_client import Client
 
 #: Property names used when the report target is a database.
@@ -11,6 +19,14 @@ DATE_PROP = "Date"
 #: Columns a database target must have. Only checked for diagnostics -
 #: a page target has no properties beyond its title.
 REQUIRED_PROPS_HINT = {TITLE_PROP: "title", DATE_PROP: "date"}
+
+#: Shown in the report instead of the bare bucket names.
+_BUCKET_LABELS = {
+    BUCKET_SAFE: "🛡 안전자산",
+    BUCKET_CORE: "📊 일반",
+    BUCKET_GROWTH: "🚀 미래성장",
+    UNMANAGED: "❔ 전략 외 보유",
+}
 
 PARENT_DATABASE = "database"
 PARENT_PAGE = "page"
@@ -141,7 +157,14 @@ class NotionReporter:
             }
         return properties
 
-    def create_report(self, snapshot, news_data, ai_comment=None, universe_review=None):
+    def create_report(
+        self,
+        snapshot,
+        news_data,
+        ai_comment=None,
+        universe_review=None,
+        bucket_allocation=None,
+    ):
         """Create a page under the configured database or page.
 
         Returns {page_id, url, title}.
@@ -161,6 +184,7 @@ class NotionReporter:
         # 2. Summary
         children_blocks.append(self._create_heading_block("📊 Asset Summary"))
         children_blocks.extend(self._summary_blocks(snapshot))
+        children_blocks.extend(self._bucket_blocks(bucket_allocation))
 
         # 3. Holdings
         if snapshot.positions:
@@ -225,6 +249,52 @@ class NotionReporter:
         )
         print(f"[Notion] Successfully created report: {title}")
         return {"page_id": page.get("id"), "url": page.get("url"), "title": title}
+
+    def _bucket_blocks(self, allocation):
+        """Where the portfolio actually sits against the plan it is meant to hold.
+
+        A strategy organised around bucket weights whose report never shows
+        them can drift to half its safe weight for months while every screen
+        looks normal - the same silence as a job that stopped running. The
+        gap is printed next to each share so "off plan" is readable without
+        arithmetic.
+        """
+        if not allocation:
+            return []
+
+        order = {BUCKET_SAFE: 0, BUCKET_CORE: 1, BUCKET_GROWTH: 2, UNMANAGED: 3}
+        lines = []
+        for bucket in sorted(allocation, key=lambda b: order.get(b, 9)):
+            row = allocation[bucket]
+            share = row.get("share") or ZERO
+            target = row.get("target")
+            label = _BUCKET_LABELS.get(bucket, bucket)
+            if target is None:
+                lines.append(f"{label}: {share:.1%} (계획 없음)")
+                continue
+            gap = share - target
+            arrow = "▲" if gap > 0 else ("▼" if gap < 0 else "=")
+            lines.append(
+                f"{label}: {share:.1%} / 목표 {target:.0%} {arrow} {abs(gap):.1%}"
+            )
+        blocks = [
+            self._create_subheading_block("Allocation vs Plan"),
+            self._create_paragraph_block("\n".join(lines)),
+        ]
+
+        unmanaged = allocation.get(UNMANAGED)
+        if unmanaged and (unmanaged.get("share") or ZERO) > ZERO:
+            symbols = ", ".join(unmanaged.get("symbols") or [])
+            blocks.append(
+                self._create_callout_block(
+                    f"전략이 관리하지 않는 보유분이 {unmanaged['share']:.1%}입니다"
+                    f"{f' ({symbols})' if symbols else ''}. 유니버스 밖이라 "
+                    "전략이 추가 매수도 매도도 하지 않습니다 — 버킷 비중은 이 몫을 "
+                    "포함한 전체 자산 기준입니다.",
+                    emoji="📌",
+                )
+            )
+        return blocks
 
     def _summary_blocks(self, snapshot):
         blocks = []

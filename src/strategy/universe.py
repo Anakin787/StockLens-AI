@@ -43,6 +43,11 @@ BUCKET_CORE = "CORE"
 BUCKET_GROWTH = "GROWTH"
 BUCKETS = (BUCKET_SAFE, BUCKET_CORE, BUCKET_GROWTH)
 
+#: Not a bucket - holdings the universe does not cover. The account predates
+#: the strategy and some of it (a 2x single-stock fund, say) is exactly what
+#: the policy here would now refuse to buy.
+UNMANAGED = "UNMANAGED"
+
 KIND_STOCK = "STOCK"
 KIND_INDEX_ETF = "INDEX_ETF"
 KIND_SINGLE_STOCK_ETF = "SINGLE_STOCK_ETF"
@@ -199,6 +204,43 @@ class Universe:
         if not allow_leverage:
             picked = tuple(i for i in picked if not i.is_leveraged)
         return picked
+
+    def bucket_allocation(self, snapshot, targets=None):
+        """``{bucket: {"value_krw", "share", "target", "symbols"}}`` for a snapshot.
+
+        The strategy is organised around these shares, so a report that cannot
+        show them cannot show whether the plan is being followed - the account
+        could drift to half its safe weight for months and every screen would
+        look normal. Holdings the universe does not cover are grouped under
+        ``UNMANAGED``: they are real money and belong in the denominator, but
+        they are not part of any bucket's plan and no target is claimed for
+        them.
+        """
+        by_bucket = {}
+        total = ZERO
+        for position in getattr(snapshot, "positions", []) or []:
+            instrument = self.get(position.symbol)
+            bucket = instrument.bucket if instrument is not None else UNMANAGED
+            rate = snapshot.exchange_rate if position.is_foreign else ONE
+            value = position.evaluation * (rate or ONE)
+            row = by_bucket.setdefault(
+                bucket, {"value_krw": ZERO, "symbols": [], "target": None}
+            )
+            row["value_krw"] += value
+            row["symbols"].append(position.symbol)
+            total += value
+
+        targets = dict(targets or {})
+        for bucket in BUCKETS:
+            if targets.get(bucket) is not None and bucket not in by_bucket:
+                by_bucket[bucket] = {
+                    "value_krw": ZERO, "symbols": [], "target": None
+                }
+        for bucket, row in by_bucket.items():
+            row["share"] = (row["value_krw"] / total) if total > ZERO else ZERO
+            row["target"] = targets.get(bucket)
+            row["symbols"].sort()
+        return by_bucket
 
     def audit(self, snapshot):
         """Held symbols that this universe does not cover.
