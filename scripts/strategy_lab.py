@@ -776,6 +776,31 @@ def build_refine():
     return groups
 
 
+def build_weekday():
+    """The weekday question, asked once more on the settled configuration.
+
+    The first sweep liked Friday - four windows out of five - and the third
+    disliked it on the defensive combination. A choice with no mechanism
+    behind it flipping when other settings move is what noise looks like, but
+    the two runs used different configurations, so this asks all five days on
+    the one actually in use.
+    """
+    FINAL = dict(
+        exit_requires_trend_break=True,
+        unfilled_weight_to=BUCKET_SAFE,
+        trend_sma=150,
+        max_deploy_per_week_pct=D("0.20"),
+    )
+    names = ["월", "화", "수", "목", "금"]
+    return [(
+        "33. 리밸런스 요일 · 최종 설정에서",
+        "요일에는 작동 원리가 없습니다. 흩어지는 폭이 곧 이 실험의 노이즈 눈금이고, "
+        "그보다 작은 차이는 어느 표에서도 신호로 읽으면 안 됩니다.",
+        [(f"{names[i]}요일" + (" (현재)" if i == 0 else ""),
+          base_params(**FINAL, rebalance_weekday=i)) for i in range(5)],
+    )]
+
+
 def build_finalists():
     """The three surviving configurations, head to head.
 
@@ -923,6 +948,7 @@ def main(argv=None):
         "--ratio", action="store_true", help="낙폭당 수익 최대화 (권장 목적함수)"
     )
     parser.add_argument("--refine", action="store_true", help="선두 설정 주변 정밀 탐색")
+    parser.add_argument("--weekday", action="store_true", help="리밸런스 요일 재확인")
     parser.add_argument(
         "--contribution", type=int, default=CONTRIBUTION_KRW, help="월 적립액(원)"
     )
@@ -937,7 +963,9 @@ def main(argv=None):
     if not args.group:
         write_benchmarks(lab, starts)
 
-    if args.refine:
+    if args.weekday:
+        groups = build_weekday()
+    elif args.refine:
         groups = build_refine()
     elif args.ratio:
         groups = build_ratio()
