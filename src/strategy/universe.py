@@ -205,7 +205,7 @@ class Universe:
             picked = tuple(i for i in picked if not i.is_leveraged)
         return picked
 
-    def bucket_allocation(self, snapshot, targets=None):
+    def bucket_allocation(self, snapshot, targets=None, include_unmanaged=False):
         """``{bucket: {"value_krw", "share", "target", "symbols"}}`` for a snapshot.
 
         The strategy is organised around these shares, so a report that cannot
@@ -230,6 +230,9 @@ class Universe:
             row["symbols"].append(position.symbol)
             total += value
 
+        managed_total = total - (by_bucket.get(UNMANAGED, {}).get("value_krw") or ZERO)
+        denominator = total if include_unmanaged else managed_total
+
         targets = dict(targets or {})
         for bucket in BUCKETS:
             if targets.get(bucket) is not None and bucket not in by_bucket:
@@ -237,7 +240,8 @@ class Universe:
                     "value_krw": ZERO, "symbols": [], "target": None
                 }
         for bucket, row in by_bucket.items():
-            row["share"] = (row["value_krw"] / total) if total > ZERO else ZERO
+            base = total if bucket == UNMANAGED else denominator
+            row["share"] = (row["value_krw"] / base) if base > ZERO else ZERO
             row["target"] = targets.get(bucket)
             row["symbols"].sort()
         return by_bucket

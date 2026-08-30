@@ -187,8 +187,13 @@ def test_bucket_allocation_reports_share_against_target():
     assert alloc[BUCKET_CORE]["share"] == Decimal("0.8")
 
 
-def test_holdings_outside_the_universe_are_unmanaged_not_miscounted():
-    """They are real money and belong in the denominator, with no target."""
+def test_holdings_outside_the_universe_are_reported_but_not_in_the_denominator():
+    """Somebody else's plan, held elsewhere, and untradeable by this strategy.
+
+    Counting them would make every bucket read low forever - a permanent
+    alarm about a fact that is not going to change. The row is still shown,
+    against the whole portfolio, so the money is never simply invisible.
+    """
     from decimal import Decimal
     from src.strategy.universe import BUCKET_CORE, UNMANAGED
 
@@ -196,9 +201,22 @@ def test_holdings_outside_the_universe_are_unmanaged_not_miscounted():
     snapshot = _snap([_pos("AAA", 5, 100), _pos("TSLL", 5, 100)])
     alloc = universe.bucket_allocation(snapshot, targets={BUCKET_CORE: Decimal("0.6")})
 
-    assert alloc[UNMANAGED]["share"] == Decimal("0.5")
+    assert alloc[BUCKET_CORE]["share"] == Decimal("1")  # 500 of 500 managed
+    assert alloc[UNMANAGED]["share"] == Decimal("0.5")  # 500 of 1000 overall
     assert alloc[UNMANAGED]["target"] is None
     assert alloc[UNMANAGED]["symbols"] == ["TSLL"]
+
+
+def test_include_unmanaged_restores_the_whole_portfolio_view():
+    from decimal import Decimal
+    from src.strategy.universe import BUCKET_CORE
+
+    universe = Universe((Instrument("AAA", "A", kind=KIND_STOCK, bucket=BUCKET_CORE),))
+    snapshot = _snap([_pos("AAA", 5, 100), _pos("TSLL", 5, 100)])
+    alloc = universe.bucket_allocation(
+        snapshot, targets={BUCKET_CORE: Decimal("0.6")}, include_unmanaged=True
+    )
+    assert alloc[BUCKET_CORE]["share"] == Decimal("0.5")
 
 
 def test_a_bucket_with_a_target_and_no_holdings_still_appears():

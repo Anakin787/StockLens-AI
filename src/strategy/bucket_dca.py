@@ -654,6 +654,53 @@ class BucketDcaStrategy(MomentumDcaStrategy):
 
     # ------------------------------------------------------------ sizing
 
+    def _managed_equity(self, ctx):
+        """Cash plus the holdings this strategy's universe actually covers.
+
+        ``ctx.equity_krw`` is the whole portfolio, and for this account most
+        of it sits at another broker in instruments the leverage policy
+        refuses to hold - money this strategy can neither buy nor sell.
+        Sizing a 20% safe bucket against that base asks for 20% of assets it
+        does not control, which lands as a far larger share of the account it
+        does: with 21M won held elsewhere and 10M deposited here, a 20% safe
+        target reads 6.2M, or 62% of everything actually tradable.
+
+        So the base is what the strategy manages. Holdings outside the
+        universe are reported (see ``Universe.bucket_allocation``) but never
+        sized against - they are somebody else's plan.
+        """
+        total = ZERO
+        for symbol, position in ctx.positions.items():
+            if self.universe.get(symbol) is None:
+                continue
+            total += ctx.to_krw(position.evaluation, position.currency) or ZERO
+
+        rate = ctx.exchange_rate
+        for currency, amount in (ctx.buying_power or {}).items():
+            if amount and amount > ZERO:
+                if currency == "KRW":
+                    total += amount
+                elif rate:
+                    total += amount * rate
+        return total
+
+    def _clip_to_max_weight(self, ctx, instrument, amount):
+        """As the parent, but against managed equity - see ``_managed_equity``."""
+        equity = self._managed_equity(ctx)
+        rate = ctx.exchange_rate
+        if equity <= ZERO or not rate:
+            return amount
+
+        position = ctx.position(instrument.symbol)
+        held_krw = ZERO
+        if position is not None:
+            held_krw = ctx.to_krw(position.evaluation, position.currency) or ZERO
+
+        cap_krw = instrument.max_weight * equity - held_krw
+        if cap_krw <= ZERO:
+            return ZERO
+        return min(amount, (cap_krw / rate).quantize(CENT, rounding=ROUND_DOWN))
+
     def _budget(self, ctx, mode, p):
         """Cash to deploy this evaluation, capped by a share of equity.
 
@@ -672,7 +719,7 @@ class BucketDcaStrategy(MomentumDcaStrategy):
             caps.append(p.max_deploy_per_week_usd)
         if p.max_deploy_per_week_pct is not None:
             rate = ctx.exchange_rate
-            equity_krw = ctx.equity_krw
+            equity_krw = self._managed_equity(ctx)
             if rate and equity_krw > ZERO:
                 caps.append(p.max_deploy_per_week_pct * equity_krw / rate)
         # The fixed figure is a floor for a small account, not a second
@@ -692,7 +739,7 @@ class BucketDcaStrategy(MomentumDcaStrategy):
         ``unfilled_weight_to`` rather than leaving it in cash or crowding it
         into the bucket that could not fill itself.
         """
-        equity = ctx.equity_krw
+        equity = self._managed_equity(ctx)
         if equity <= ZERO:
             return {}
 
@@ -757,8 +804,6 @@ class BucketDcaStrategy(MomentumDcaStrategy):
         budget = self._budget(ctx, mode, p)
         if budget < p.min_order_usd:
             return
-        equity = ctx.equity_krw
-        rate = ctx.exchange_rate
 
         for bucket, share, rows in self._bucket_shares(ranked, p, ctx):
             if share <= ZERO or not rows:

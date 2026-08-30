@@ -270,7 +270,7 @@ class NotionReporter:
             target = row.get("target")
             label = _BUCKET_LABELS.get(bucket, bucket)
             if target is None:
-                lines.append(f"{label}: {share:.1%} (계획 없음)")
+                lines.append(f"{label}: {share:.1%} (전체 자산 대비 · 계획 없음)")
                 continue
             gap = share - target
             arrow = "▲" if gap > 0 else ("▼" if gap < 0 else "=")
@@ -287,10 +287,10 @@ class NotionReporter:
             symbols = ", ".join(unmanaged.get("symbols") or [])
             blocks.append(
                 self._create_callout_block(
-                    f"전략이 관리하지 않는 보유분이 {unmanaged['share']:.1%}입니다"
-                    f"{f' ({symbols})' if symbols else ''}. 유니버스 밖이라 "
-                    "전략이 추가 매수도 매도도 하지 않습니다 — 버킷 비중은 이 몫을 "
-                    "포함한 전체 자산 기준입니다.",
+                    f"전략 외 보유 {unmanaged['share']:.1%}"
+                    f"{f' ({symbols})' if symbols else ''} — 따로 관리하는 몫이라 "
+                    "위 버킷 비중 계산에서 제외했습니다. 전략은 이 종목들을 "
+                    "사지도 팔지도 않습니다.",
                     emoji="📌",
                 )
             )

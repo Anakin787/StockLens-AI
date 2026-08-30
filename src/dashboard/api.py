@@ -68,7 +68,7 @@ def history(range: str = Query("3M", pattern="^(1W|1M|3M|1Y|ALL)$")):
 
 
 @app.get("/api/allocation")
-def allocation(by: str = Query("market", pattern="^(market|currency)$")):
+def allocation(by: str = Query("market", pattern="^(market|currency|bucket)$")):
     return get_service().allocation(by)
 
 

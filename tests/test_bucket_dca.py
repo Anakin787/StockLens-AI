@@ -376,3 +376,38 @@ def test_strict_incumbency_never_displaces_so_nothing_is_sold_for_it():
     )
     sells = {s.symbol for s in strategy(params).evaluate(ctx) if s.side == SIDE_SELL}
     assert not sells
+
+
+# ------------------------------------------------------- managed equity
+
+
+def test_holdings_outside_the_universe_are_not_part_of_the_sizing_base():
+    """Money at another broker is not money this strategy can allocate.
+
+    Sizing a 20% safe bucket against a portfolio that is mostly untradeable
+    asks for a fifth of assets the strategy does not control, which lands as
+    a far larger share of the account it does.
+    """
+    history = history_for({"AAA": "0.03", "BBB": "0.02"})
+    outside = position("TSLL", quantity="1000", price="100")  # 100,000 USD
+    with_outside = context(
+        datetime(2025, 3, 3, 10), history, positions=[outside], total_krw="200000000"
+    )
+    without = context(datetime(2025, 3, 3, 10), history, total_krw="10000000")
+
+    a = {s.symbol: s.amount for s in strategy().evaluate(with_outside) if s.side == SIDE_BUY}
+    b = {s.symbol: s.amount for s in strategy().evaluate(without) if s.side == SIDE_BUY}
+
+    assert a and a == b, "an untradeable holding must not change what is bought"
+
+
+def test_cash_counts_toward_the_sizing_base():
+    """It is the money about to be deployed; excluding it would shrink every
+    target to nothing on a freshly funded account."""
+    history = history_for({"AAA": "0.03"})
+    rich = context(datetime(2025, 3, 3, 10), history, buying_power={"USD": D("50000")})
+    poor = context(datetime(2025, 3, 3, 10), history, buying_power={"USD": D("500")})
+
+    big = sum((s.amount for s in strategy().evaluate(rich) if s.side == SIDE_BUY), D("0"))
+    small = sum((s.amount for s in strategy().evaluate(poor) if s.side == SIDE_BUY), D("0"))
+    assert big > small

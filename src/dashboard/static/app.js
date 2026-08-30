@@ -22,6 +22,9 @@ const COLORS = {
 // Fixed assignment: a bucket keeps its colour regardless of ordering or count.
 const ALLOCATION_COLORS = {
   KR: "#00a572", US: "#2563eb", KRW: "#00a572", USD: "#2563eb", OTHER: "#8d90a0",
+  // Buckets read as a risk ladder: calm, core, speculative - then grey for
+  // the holdings no plan covers, which must not look like a fourth bucket.
+  SAFE: "#0891b2", CORE: "#2563eb", GROWTH: "#c026d3", UNMANAGED: "#8d90a0",
 };
 
 const state = { view: "overview", range: "3M", allocBy: "market", history: null,
@@ -404,15 +407,19 @@ function shortKRW(value) {
 
 async function loadAllocation() {
   const data = await getJSON(`/api/allocation?by=${state.allocBy}`);
-  renderDonut(data.segments || []);
+  // A bucket at zero is exactly the case worth seeing, but a zero-length arc
+  // draws nothing - so the donut skips them while the legend keeps them.
+  const segments = data.segments || [];
+  renderDonut(segments.filter((s) => s.share > 0), segments);
 }
 
-function renderDonut(segments) {
+function renderDonut(segments, legendSegments) {
   const svg = $("donut");
   const legend = $("alloc-legend");
   legend.innerHTML = "";
+  const rows = legendSegments || segments;
 
-  if (!segments.length) {
+  if (!rows.length) {
     svg.innerHTML = `<circle cx="50" cy="50" r="40" fill="none" stroke="#2d3449" stroke-width="12"/>`;
     $("donut-label").textContent = "—";
     $("donut-value").textContent = "—";
@@ -433,7 +440,13 @@ function renderDonut(segments) {
       stroke-dasharray="${Math.max(0, length - gap).toFixed(2)} ${(CIRC - length + gap).toFixed(2)}"
       stroke-dashoffset="${(-offset).toFixed(2)}"><title>${segment.label}: ${(segment.share * 100).toFixed(1)}%</title></circle>`;
     offset += length;
+  });
 
+  // The legend walks every row, including the ones the donut could not draw.
+  // A bucket sitting at zero against a 20% target is the single most useful
+  // thing this chart can say, and it has no arc to say it with.
+  rows.forEach((segment) => {
+    const color = ALLOCATION_COLORS[segment.key] || ALLOCATION_COLORS.OTHER;
     const row = document.createElement("div");
     row.className = "flex justify-between items-center text-sm";
     row.innerHTML =
@@ -441,13 +454,27 @@ function renderDonut(segments) {
       `<span class="value font-data-mono font-medium text-on-surface-variant"></span>`;
     row.querySelector(".swatch").style.backgroundColor = color;
     row.querySelector(".label").textContent = segment.label;
-    row.querySelector(".value").textContent = fmtInt(segment.value_krw);
+    // With a plan to compare against, the share and the gap say more than the
+    // won figure: "off plan" should be readable without doing the subtraction.
+    if (segment.target != null) {
+      const gap = segment.share - segment.target;
+      const arrow = gap > 0.0005 ? "\u25b2" : gap < -0.0005 ? "\u25bc" : "=";
+      row.querySelector(".value").textContent =
+        `${(segment.share * 100).toFixed(1)}% / ${(segment.target * 100).toFixed(0)}% ` +
+        `${arrow}${(Math.abs(gap) * 100).toFixed(1)}`;
+    } else {
+      if (segment.unmanaged) {
+        row.querySelector(".label").textContent = `${segment.label} (\uacc4\ud68d \ubc16)`;
+      }
+      row.querySelector(".value").textContent = fmtInt(segment.value_krw);
+    }
     legend.appendChild(row);
   });
 
   svg.innerHTML = markup;
-  $("donut-label").textContent = segments[0].key;
-  $("donut-value").textContent = (segments[0].share * 100).toFixed(0) + "%";
+  const lead = segments[0] || rows[0];
+  $("donut-label").textContent = lead.label || lead.key;
+  $("donut-value").textContent = (lead.share * 100).toFixed(0) + "%";
 }
 
 /* -------------------------------------------------------------- holdings */

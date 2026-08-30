@@ -466,3 +466,21 @@ def test_no_snapshots_at_all_is_not_reported_as_stale(client):
     assert data["snapshot_stale"] is False
     assert data["last_snapshot_ts"] is None
     assert data["snapshot_count"] == 0
+
+
+def test_allocation_by_bucket_reports_target_and_gap(client):
+    response = client.get("/api/allocation?by=bucket")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["by"] == "bucket"
+    keys = [s["key"] for s in body["segments"]]
+    # Safe first, unmanaged last - a risk ladder, then the money no plan covers.
+    assert keys[0] == "SAFE"
+    if "UNMANAGED" in keys:
+        assert keys[-1] == "UNMANAGED"
+        unmanaged = next(s for s in body["segments"] if s["key"] == "UNMANAGED")
+        assert unmanaged["target"] is None
+
+
+def test_allocation_rejects_a_grouping_it_does_not_know(client):
+    assert client.get("/api/allocation?by=sector").status_code == 422

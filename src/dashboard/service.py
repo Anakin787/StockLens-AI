@@ -227,6 +227,9 @@ class DashboardService:
         if snapshot is None:
             return {"error": error, "segments": []}
 
+        if by == "bucket":
+            return self._bucket_allocation(snapshot)
+
         buckets = snapshot.allocation(by)
         total = sum(buckets.values()) or Decimal("1")
         segments = [
@@ -240,6 +243,57 @@ class DashboardService:
         ]
         segments.sort(key=lambda item: item["value_krw"], reverse=True)
         return {"by": by, "segments": segments}
+
+    def _bucket_allocation(self, snapshot):
+        """The strategy's own shape - safe / core / growth against target.
+
+        The other two groupings answer "where is the money"; this one answers
+        "is the plan being followed", which is the only question the active
+        strategy is organised around and the only one no screen could
+        previously answer.
+        """
+        from src.strategy.loader import load_strategies
+        from src.strategy.universe import UNMANAGED, parse_universe
+
+        try:
+            targets = next(
+                (
+                    s.params.weights
+                    for s in load_strategies(self.config.trading)
+                    if isinstance(
+                        getattr(getattr(s, "params", None), "weights", None), dict
+                    )
+                ),
+                None,
+            )
+        except Exception:  # noqa: BLE001 - a chart must not break the page
+            targets = None
+        if not targets:
+            return {
+                "by": "bucket",
+                "segments": [],
+                "error": "활성 전략에 버킷 계획이 없습니다.",
+            }
+
+        allocation = parse_universe(self.config.trading.universe).bucket_allocation(
+            snapshot, targets=targets
+        )
+        order = {"SAFE": 0, "CORE": 1, "GROWTH": 2, UNMANAGED: 3}
+        segments = [
+            {
+                "key": bucket,
+                "label": _allocation_label(bucket, "bucket"),
+                "value_krw": _num(row["value_krw"]),
+                "share": _num(row["share"]),
+                "target": _num(row["target"]) if row["target"] is not None else None,
+                "symbols": row["symbols"],
+                "unmanaged": bucket == UNMANAGED,
+            }
+            for bucket, row in sorted(
+                allocation.items(), key=lambda kv: order.get(kv[0], 9)
+            )
+        ]
+        return {"by": "bucket", "segments": segments}
 
     def reports(self, limit=20):
         return {"reports": self.store.recent_reports(limit)}
@@ -419,6 +473,13 @@ def _decimal_or_none(value):
 def _allocation_label(key, by):
     if by == "currency":
         return key
+    if by == "bucket":
+        return {
+            "SAFE": "안전자산",
+            "CORE": "일반",
+            "GROWTH": "미래성장",
+            "UNMANAGED": "전략 외 보유",
+        }.get(key, key)
     return {"KR": "KRX (Domestic)", "US": "US (Foreign)"}.get(key, key or "Other")
 
 
