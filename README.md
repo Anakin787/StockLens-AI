@@ -445,6 +445,10 @@ pytest tests/ -v
 
 ## 참고 문서
 
+- **[docs/STRATEGY.md](docs/STRATEGY.md)** — 지금 돌고 있는 전략이 무엇을 하는지.
+  유니버스, 매주 일어나는 일, 안전장치, 성과와 그 숫자를 믿을 때의 단서까지 한
+  문서에 있습니다. 나머지 세 문서는 이 결론에 이르는 과정의 기록입니다.
+
 | 문서 | 내용 |
 |---|---|
 | [DESIGN_Toss_API_Migration.md](./DESIGN_Toss_API_Migration.md) | Phase 1 설계 — 토스 API 조사 결과와 전환 근거 |

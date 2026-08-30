@@ -1,5 +1,7 @@
 # 실험에서 나온 결론
 
+> **전략이 무엇을 하는지 먼저 보려면 [STRATEGY.md](STRATEGY.md)** — 이 문서는 그 결론에 이르는 과정의 기록입니다.
+
 [STRATEGY_LAB.md](STRATEGY_LAB.md)의 표를 해석한 문서입니다. 용어가 낯설면
 그 문서 앞부분의 용어 설명을 먼저 보세요. 결정이 필요한 항목은
 [STRATEGY_DECISIONS.md](STRATEGY_DECISIONS.md)에 따로 모아뒀습니다.

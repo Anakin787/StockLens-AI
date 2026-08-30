@@ -1,5 +1,7 @@
 # 전략 실험 노트
 
+> **전략이 무엇을 하는지 먼저 보려면 [STRATEGY.md](STRATEGY.md)** — 이 문서는 그 결론에 이르는 과정의 기록입니다.
+
 `bucket-dca` 전략을 여러 설정으로 돌려보고 결과를 모아둔 문서입니다.
 
 재현: `python -m scripts.strategy_lab` (전체) 또는 `--group "1."` (한 묶음만).
