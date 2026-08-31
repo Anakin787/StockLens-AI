@@ -104,7 +104,7 @@ class Lab:
         last = self.fx.as_of(day).last()
         return last.close if last is not None else D("1350")
 
-    def run_case(self, strategy, start, tax=True):
+    def run_case(self, strategy, start, tax=True, stop_loss_pct=None):
         config = BacktestConfig(
             initial_krw=D(INITIAL_KRW),
             contribution=self.schedule,
@@ -113,6 +113,7 @@ class Lab:
             benchmark=BENCHMARK,
             trade_from=start,
             tax=CapitalGainsTax(enabled=tax),
+            stop_loss_pct=stop_loss_pct,
         )
         result = Backtester(
             strategy, self.history, config, fx_history=self.fx
@@ -149,6 +150,7 @@ class Lab:
             "held_final": counts[-1] if counts else 0,
             "tax_krw": metrics.get("tax_paid_krw"),
             "rejections": dict(rejections),
+            "stop_loss_sells": sum(1 for t in result.trades if t.mode == "stop_loss"),
         }
 
     # ---------------------------------------------------------- benchmarks

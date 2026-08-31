@@ -19,12 +19,14 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from src.backtest.context import build_backtest_context
-from src.backtest.fills import ContributionSchedule, FillModel
+from src.backtest.fills import BPS, ContributionSchedule, FillModel
 from src.backtest.metrics import BacktestResult, EquityPoint, summarize
 from src.backtest.sim import SimPortfolio
 from src.backtest.tax import RealisedGainLedger
 from src.execution.risk import RiskGate, RiskLimits
 from src.models import ZERO
+from src.strategy.base import SIDE_SELL
+from src.strategy.universe import BUCKET_SAFE
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,16 @@ class BacktestConfig:
     #: tax at zero would rank them on a cost the account cannot skip. Pass
     #: ``CapitalGainsTax(enabled=False)`` to see the pre-tax figure.
     tax: object = None
+    #: Fixed-percent stop-loss, simulated as a resting order rather than a
+    #: strategy signal - neither bucket_dca nor momentum_dca emit
+    #: ``stop_loss_price`` today (see momentum_dca's docstring on why), so
+    #: this exists to answer whether they should before wiring one in for
+    #: real. Checked against each lot's live cost basis (recomputed on every
+    #: add) and each day's *low*, before the strategy sees that day's
+    #: context - the same sequencing a broker-side OCO bracket would have.
+    #: SAFE-bucket holdings (SHY, GLD) are exempt: they exist to be held
+    #: through the drawdowns this would cut them on. ``None`` disables it.
+    stop_loss_pct: Decimal | None = None
 
 
 class Backtester:
@@ -72,6 +84,13 @@ class Backtester:
             if last is not None:
                 return last.close
         return self.config.fx_rate
+
+    def _is_safe_bucket(self, symbol):
+        universe = getattr(self.strategy, "universe", None)
+        if universe is None:
+            return False
+        instrument = universe.get(symbol)
+        return instrument is not None and instrument.bucket == BUCKET_SAFE
 
     def run(self):
         benchmark = self.history.get(self.config.benchmark)
@@ -131,6 +150,29 @@ class Backtester:
                 for trade in sim.trades[before:]:
                     ledger.record(day, trade.pnl_usd, self._fx_rate(day))
             pending = still_pending
+
+            # 1.5. Stop-loss, if configured: a resting order, checked against
+            # today's low before anything else touches this position today.
+            if self.config.stop_loss_pct is not None:
+                for symbol in list(sim.lots.keys()):
+                    if self._is_safe_bucket(symbol):
+                        continue
+                    bar = day_bars.get(symbol)
+                    if bar is None or bar.date != day:
+                        continue
+                    lot = sim.lots[symbol]
+                    stop_price = lot.avg_price * (1 - self.config.stop_loss_pct)
+                    if bar.low > stop_price:
+                        continue
+                    fill_price = stop_price - stop_price * self.config.fills.slippage_bps / BPS
+                    commission = self.config.fills.commission(lot.quantity * fill_price)
+                    before = len(sim.trades)
+                    sim.apply_fill(
+                        day, symbol, SIDE_SELL, lot.quantity, fill_price, commission,
+                        mode="stop_loss",
+                    )
+                    for trade in sim.trades[before:]:
+                        ledger.record(day, trade.pnl_usd, self._fx_rate(day))
 
             # Last year's bill, settled once, on the first session of the new
             # year. Charged in cash, so it competes with everything else the
