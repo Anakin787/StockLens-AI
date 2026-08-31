@@ -339,7 +339,19 @@
       <!-- ============ REPORTS ============ -->
       <section data-view="reports" hidden class="bg-surface-container rounded-lg border border-outline-variant/50 overflow-hidden">
         <div class="p-4 border-b border-outline-variant/50"><h3 class="text-headline-md font-bold">Notion Reports</h3></div>
-        <div id="reports-list" class="divide-y divide-outline-variant/30"></div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-on-surface-variant text-label-caps uppercase tracking-wider border-b border-outline-variant/50">
+                <th class="text-left px-4 py-2 font-bold whitespace-nowrap">생성 시각</th>
+                <th class="text-left px-4 py-2 font-bold">리포트</th>
+                <th class="text-left px-4 py-2 font-bold">AI 코멘트</th>
+                <th class="text-right px-4 py-2 font-bold whitespace-nowrap">링크</th>
+              </tr>
+            </thead>
+            <tbody id="reports-body"></tbody>
+          </table>
+        </div>
       </section>
 
       <!-- ============ AUDIT LOG ============ -->
@@ -349,12 +361,12 @@
             <h3 class="text-headline-md font-bold">Audit Log</h3>
             <p class="text-on-surface-variant/60 text-sm mt-0.5 max-w-3xl">
               유니버스·전략·파라미터·리스크 한도 변경과 AI 검토 결과의 기록입니다.
-              큰 시각은 <strong>변경 시각</strong>(설정이 담긴 파일 기준)이고, 그 아래
-              작은 줄에 근거(<span class="font-data-mono text-xs">git 커밋</span> ·
-              <span class="font-data-mono text-xs">파일 수정시각</span>)와
-              <strong>감지 시각</strong>을 함께 적었습니다. git 커밋은 정확하고, 파일
-              수정시각은 그 파일의 마지막 저장이라 근사치입니다 — 시각에 마우스를 올리면
-              설명이 나옵니다.
+              <strong>변경 시각</strong>은 설정이 담긴 파일 기준이고, 그 아래 작은 줄이
+              그 시각을 어디서 얻었는지(<span class="font-data-mono text-xs">git 커밋</span> ·
+              <span class="font-data-mono text-xs">파일 수정시각</span>)를 말합니다.
+              git 커밋은 정확하고, 파일 수정시각은 그 파일의 마지막 저장이라 근사치입니다.
+              <strong>감지 시각</strong>은 별개의 시계라 맨 오른쪽에 따로 두었습니다 —
+              시각에 마우스를 올리면 설명이 나옵니다.
             </p>
           </div>
           <div class="flex gap-1 shrink-0" id="audit-filters">
@@ -367,7 +379,20 @@
             <button class="audit-tab" data-category="kill_switch">킬 스위치</button>
           </div>
         </div>
-        <div id="audit-list" class="divide-y divide-outline-variant/30"></div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-on-surface-variant text-label-caps uppercase tracking-wider border-b border-outline-variant/50">
+                <th class="text-left px-4 py-2 font-bold whitespace-nowrap">변경 시각</th>
+                <th class="text-left px-4 py-2 font-bold whitespace-nowrap">분류</th>
+                <th class="text-left px-4 py-2 font-bold">내용</th>
+                <th class="text-left px-4 py-2 font-bold whitespace-nowrap">변경자 · 출처</th>
+                <th class="text-right px-4 py-2 font-bold whitespace-nowrap">감지 시각</th>
+              </tr>
+            </thead>
+            <tbody id="audit-body"></tbody>
+          </table>
+        </div>
       </section>
 
       <!-- ============ SETTINGS ============ -->
@@ -415,6 +440,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=4"></script>
+<script src="/static/app.js?v=6"></script>
 </body>
 </html>

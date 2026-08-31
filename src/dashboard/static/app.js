@@ -589,36 +589,56 @@ function makeNameEditable(cell, position) {
 
 async function loadReports() {
   const data = await getJSON("/api/reports");
-  const host = $("reports-list");
-  host.innerHTML = "";
+  const body = $("reports-body");
+  body.innerHTML = "";
   const reports = data.reports || [];
 
   if (!reports.length) {
-    host.innerHTML = `<div class="p-8 text-center text-on-surface-variant">
-      아직 생성된 리포트가 없습니다. <code class="font-data-mono text-primary">python main.py</code> 를 실행하세요.</div>`;
-    return;
+    body.innerHTML = `<tr><td colspan="4" class="px-4 py-8 text-center text-on-surface-variant">
+      아직 생성된 리포트가 없습니다. <code class="font-data-mono text-primary">python main.py</code> 를 실행하세요.</td></tr>`;
+  } else {
+    reports.forEach((report) => {
+      const row = document.createElement("tr");
+      row.className = "border-b border-outline-variant/20 hover:bg-surface-container-high transition-colors align-top";
+
+      const whenCell = document.createElement("td");
+      whenCell.className = "px-4 py-3 font-data-mono text-xs text-on-surface-variant whitespace-nowrap";
+      whenCell.textContent = report.ts || "—";
+
+      const titleCell = document.createElement("td");
+      titleCell.className = "px-4 py-3 font-semibold text-on-surface";
+      titleCell.textContent = report.title || "Report";
+
+      const commentCell = document.createElement("td");
+      commentCell.className = "px-4 py-3 text-sm text-on-surface-variant";
+      const comment = document.createElement("p");
+      comment.className = "line-clamp-2 max-w-2xl";
+      comment.textContent = (report.ai_comment || "").slice(0, 220);
+      commentCell.appendChild(comment);
+
+      const linkCell = document.createElement("td");
+      linkCell.className = "px-4 py-3 text-right whitespace-nowrap";
+      if (report.url) {
+        const open = document.createElement("a");
+        open.className = "inline-block border border-outline-variant hover:bg-surface-container " +
+          "px-3 py-1.5 rounded text-label-caps font-bold tracking-wide";
+        open.target = "_blank";
+        open.rel = "noopener";
+        open.href = report.url;
+        open.textContent = "OPEN";
+        linkCell.appendChild(open);
+      } else {
+        linkCell.className += " text-on-surface-variant/40";
+        linkCell.textContent = "—";
+      }
+
+      row.append(whenCell, titleCell, commentCell, linkCell);
+      body.appendChild(row);
+    });
   }
 
-  reports.forEach((report) => {
-    const item = document.createElement("div");
-    item.className = "p-4 hover:bg-surface-container-high transition-colors";
-    item.innerHTML = `
-      <div class="flex items-center justify-between gap-4">
-        <div class="min-w-0">
-          <p class="font-semibold text-on-surface truncate"></p>
-          <p class="font-data-mono text-xs text-on-surface-variant/60 mt-0.5">${report.ts}</p>
-        </div>
-        ${report.url ? `<a href="${report.url}" target="_blank" rel="noopener"
-          class="shrink-0 border border-outline-variant hover:bg-surface-container px-3 py-1.5 rounded text-label-caps font-bold tracking-wide">OPEN</a>` : ""}
-      </div>
-      <p class="text-sm text-on-surface-variant mt-2 line-clamp-2"></p>`;
-    item.querySelector("p").textContent = report.title || "Report";
-    const summary = item.querySelectorAll("p")[2];
-    if (summary) summary.textContent = (report.ai_comment || "").slice(0, 220);
-    host.appendChild(item);
-  });
-
-  // Surface the newest AI comment on the Overview card too.
+  // Surface the newest AI comment on the Overview card too. This runs even
+  // when the list is empty above - the card is driven by the same fetch.
   const latest = reports[0];
   if (latest && latest.ai_comment) {
     $("ai-text").textContent = latest.ai_comment.replace(/\s+/g, " ").slice(0, 260) + "…";
@@ -812,59 +832,85 @@ function auditChangeLine(change) {
 async function loadAudit() {
   const query = state.auditCategory ? `?category=${state.auditCategory}` : "";
   const data = await getJSON(`/api/audit${query}`);
-  const host = $("audit-list");
-  host.innerHTML = "";
+  const body = $("audit-body");
+  body.innerHTML = "";
   const entries = data.entries || [];
 
   if (!entries.length) {
-    host.innerHTML = `<div class="p-8 text-center text-on-surface-variant">
+    body.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center text-on-surface-variant">
       기록된 변경이 없습니다. 설정을 바꾼 뒤 <code class="font-data-mono text-primary">python main.py</code>
-      또는 <code class="font-data-mono text-primary">python trade.py</code> 를 실행하면 감지됩니다.</div>`;
+      또는 <code class="font-data-mono text-primary">python trade.py</code> 를 실행하면 감지됩니다.</td></tr>`;
     return;
   }
 
   entries.forEach((entry) => {
-    const item = document.createElement("div");
-    item.className = "p-4 hover:bg-surface-container-high transition-colors";
-
-    const head = document.createElement("div");
-    head.className = "flex items-center gap-2 flex-wrap";
-
-    const category = document.createElement("span");
-    category.className = "font-semibold text-on-surface";
-    category.textContent = AUDIT_LABELS[entry.category] || entry.category;
-
-    const when = document.createElement("span");
-    when.className = "font-data-mono text-xs text-on-surface ml-auto";
+    const row = document.createElement("tr");
+    row.className = "border-b border-outline-variant/20 hover:bg-surface-container-high transition-colors align-top";
     const method = AUDIT_METHOD[entry.changed_by_method];
+
+    // The change time and the basis it was recovered from are one fact in two
+    // parts - a bare timestamp invites more trust than an mtime has earned -
+    // so they share a cell rather than sitting in columns that can be read apart.
+    const whenCell = document.createElement("td");
+    whenCell.className = "px-4 py-3 whitespace-nowrap";
+    const stamp = document.createElement("div");
     if (entry.changed_at) {
-      when.textContent = fmtStamp(entry.changed_at);
-      when.title = method ? method.title : "";
+      stamp.className = "font-data-mono text-xs text-on-surface";
+      stamp.textContent = fmtStamp(entry.changed_at);
+      stamp.title = method ? method.title : "";
     } else {
       // No recoverable change time - say so rather than showing detection
       // time in the slot a reader will read as "when it changed".
-      when.textContent = "변경 시각 불명";
-      when.className = "font-data-mono text-xs text-on-surface-variant/50 ml-auto";
+      stamp.className = "font-data-mono text-xs text-on-surface-variant/50";
+      stamp.textContent = "변경 시각 불명";
     }
-    head.append(category, when);
+    whenCell.appendChild(stamp);
+    if (method) {
+      const basis = document.createElement("div");
+      basis.className = "text-[10px] text-on-surface-variant/50 mt-0.5";
+      basis.textContent = method.label;
+      basis.title = method.title;
+      whenCell.appendChild(basis);
+    }
 
-    const who = document.createElement("p");
-    who.className = "text-xs text-on-surface-variant/60 mt-1";
-    const parts = [entry.actor || "—", entry.source || "—"];
-    if (method) parts.push(method.label);
-    parts.push(`감지 ${fmtStamp(entry.detected_at)}`);
-    who.textContent = parts.join(" · ");
+    const categoryCell = document.createElement("td");
+    categoryCell.className = "px-4 py-3 whitespace-nowrap";
+    const category = document.createElement("span");
+    category.className = "text-[10px] px-1.5 py-0.5 rounded border border-outline-variant/50 " +
+      "bg-surface-container-highest text-on-surface-variant";
+    category.textContent = AUDIT_LABELS[entry.category] || entry.category;
+    categoryCell.appendChild(category);
 
+    const whatCell = document.createElement("td");
+    whatCell.className = "px-4 py-3";
     const summary = document.createElement("p");
-    summary.className = "text-sm text-on-surface-variant mt-1";
+    summary.className = "text-sm text-on-surface";
     summary.textContent = entry.summary || "";
+    whatCell.appendChild(summary);
+    const changes = entry.changes || [];
+    if (changes.length) {
+      const detail = document.createElement("div");
+      detail.className = "mt-2 border-l-2 border-outline-variant/40 pl-3";
+      changes.forEach((change) => detail.appendChild(auditChangeLine(change)));
+      whatCell.appendChild(detail);
+    }
 
-    const changes = document.createElement("div");
-    changes.className = "mt-2 border-l-2 border-outline-variant/40 pl-3";
-    (entry.changes || []).forEach((change) => changes.appendChild(auditChangeLine(change)));
+    const whoCell = document.createElement("td");
+    whoCell.className = "px-4 py-3 text-xs text-on-surface-variant/60 whitespace-nowrap";
+    const actor = document.createElement("div");
+    actor.className = "text-on-surface-variant";
+    actor.textContent = entry.actor || "—";
+    const source = document.createElement("div");
+    source.className = "font-data-mono text-[10px] text-on-surface-variant/50 mt-0.5";
+    source.textContent = entry.source || "—";
+    whoCell.append(actor, source);
 
-    item.append(head, who, summary, changes);
-    host.appendChild(item);
+    const detectedCell = document.createElement("td");
+    detectedCell.className = "px-4 py-3 text-right font-data-mono text-xs text-on-surface-variant/50 whitespace-nowrap";
+    detectedCell.textContent = fmtStamp(entry.detected_at);
+
+    row.append(whenCell, categoryCell, whatCell, whoCell, detectedCell);
+    body.appendChild(row);
   });
 }
 
