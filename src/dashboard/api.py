@@ -117,7 +117,13 @@ def settings():
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    # The page must never be cached: it carries the ?v= stamp that decides
+    # which app.js the browser loads, so a stale copy pairs old markup with
+    # new script and the view dies on an element that no longer exists.
+    return FileResponse(
+        os.path.join(STATIC_DIR, "index.html"),
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
