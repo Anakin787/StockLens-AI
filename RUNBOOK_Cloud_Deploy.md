@@ -348,6 +348,13 @@ gcloud run jobs create m7-trade \
 
 ## 3. 스케줄 (Cloud Scheduler)
 
+> ✅ **완료 (2026-09-01).** `m7-daily-schedule`, 평일 10:00 KST. 수동 발사로 Job이 실제로
+> 실행되어 Notion 리포트까지 나가는 것을 확인했다. 시간은 기존 Windows 작업 스케줄러가
+> 쓰던 10:00에 맞췄다.
+>
+> **`m7-trade`는 아직 스케줄에 걸지 않는다.** 밖에서 킬 스위치를 내릴 수단(6장)이 생긴 뒤다.
+> 일일 리포트는 주문을 내지 않으므로 지금 돌아도 안전하다.
+
 ☁️ **아무 셸이나**
 
 ```bash
@@ -452,7 +459,10 @@ printf '%s' "$GOOGLE_AI_API_KEY" | gcloud secrets versions add GOOGLE_AI_API_KEY
 
 ### 6-2. Service 배포
 
-📁 **로컬 WSL · 리포 루트**
+> ✅ **완료 (2026-09-01).** `m7-dashboard` 배포됨. 잠금 확인 - 인증 없이 403, 토큰으로 200.
+> 이미 빌드된 이미지를 쓰므로 `--source .` 대신 `--image`를 썼다.
+
+☁️ **아무 셸이나** (아래는 `--source .` 형태이므로 📁 로컬 리포 루트)
 
 ```bash
 gcloud run deploy m7-dashboard --source . --region=$REGION \
@@ -480,6 +490,33 @@ TOSS_CLIENT_SECRET=TOSS_CLIENT_SECRET:latest"
 Notion/AI 키는 대시보드가 쓰지 않으므로 뺐다. 화면에서 뭔가 비어 보이면 그때 추가한다.
 
 ### 6-3. IAP로 잠그기 — 내 구글 계정만
+
+> 🔴 **여기서 막혀 있다 (2026-09-01).** IAP를 켜면 서비스가 **502**를 반환한다. 두 URL 모두이고,
+> 요청이 Cloud Run에 도달조차 하지 않는다 (서비스 로그에 기록이 없다) - IAP 프론트엔드가
+> 뒷단에 닿기 전에 끊는다. 아래는 모두 정상 확인됨:
+>
+> - `iap-enabled: true`, `ingress: all`, `RoutesReady/ConfigurationsReady: True`
+> - `service-<번호>@gcp-sa-iap.iam.gserviceaccount.com` → `roles/run.invoker` (서비스 단위)
+> - `acc22ai@gmail.com` → `roles/iap.httpsResourceAccessor` (IAP 리소스 단위)
+> - 동의 화면(브랜딩) 생성 후 IAP 껐다 켜기까지 시도
+> - IAP 켜기 전에는 같은 서비스가 인증 없이 403, 토큰으로 200을 정상 반환했다
+>
+> **원인 추정: OAuth 클라이언트가 없다.** 브랜딩만 만들어졌고 클라이언트는 생성되지 않은
+> 상태다. IAP가 로그인 화면을 띄울 클라이언트가 없으니 502가 난다.
+>
+> **다음에 할 일** - [클라이언트 페이지](https://console.cloud.google.com/auth/clients?project=quant-81f19)에서:
+> 1. 클라이언트 만들기 > **웹 애플리케이션** > 이름 `M7 Terminal IAP` (리디렉션 URI는 비워둔 채)
+> 2. 생성된 클라이언트 ID를 복사해 그 클라이언트의 **승인된 리디렉션 URI**에 추가:
+>    `https://iap.googleapis.com/v1/oauth/clientIds/<클라이언트ID>:handleRedirect`
+> 3. [IAP 페이지](https://console.cloud.google.com/security/iap?project=quant-81f19)에서
+>    `m7-dashboard` 행의 ⋮ 메뉴로 그 클라이언트를 연결. 메뉴가 없으면 IAP를 껐다 켜서
+>    새 클라이언트를 집게 한다.
+>
+> **CLI로는 더 진단할 수 없다.** IAP OAuth 관리 API가 2026-03-19에 영구 종료됐고,
+> `gcloud iap oauth-brands list`는 "Project must belong to an organization"으로 거부된다.
+>
+> 계속 막히면 대안은 둘이다 - 외부 HTTPS 로드밸런서 + IAP (확실하지만 LB 기본요금 월 $18
+> 수준), 또는 대시보드 앱에 자체 인증을 한 겹 추가 (비용 0, 코드 필요).
 
 **코드 수정이 필요 없는 방식.** 구글 로그인 한 번이면 폰 브라우저에서도 그대로 열린다.
 
@@ -651,6 +688,11 @@ python3 -m pytest -q
 
 ## 남은 일
 
-- [ ] **빈 config 가드** — 5장 ⚠️ 항목
-- [ ] **대시보드 배포 실행** — 절차는 6장에 정리됨. 아직 실행하지 않았고, IAP 경로는 미검증
+- [ ] **IAP 502 해결** — 6-3에 상태와 다음 단계. OAuth 클라이언트 생성부터
+- [ ] **`m7-trade` Job 생성** — PAPER 모드. 스케줄 연결은 IAP가 풀린 뒤
 - [ ] **실패 알림** — Job 실패가 조용히 묻히지 않도록 로그 기반 알림 설정
+
+### 완료
+
+- [x] 자동 빌드 (7장) · `m7-daily` Job (2장) · 스케줄 (3장) · 고정 IP/NAT (0-7)
+- [x] 시크릿·버킷·서비스계정 (0-4~0-6) · 대시보드 배포 (6-2)
