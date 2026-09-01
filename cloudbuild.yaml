@@ -1,0 +1,38 @@
+# Build only. This file never touches a running job.
+#
+# A push to main produces an image and stops there. Deploying it is a separate,
+# deliberate act (RUNBOOK_Cloud_Deploy.md, 1-2) because this repo places real
+# orders: if a bad commit could reach the next scheduled run on its own, the
+# window to notice and stop it is the time between `git push` and that run.
+# Building ahead of time is what makes the manual step cheap - the deploy is
+# then a pointer change that takes seconds, not a build you wait for.
+#
+# The image is tagged with the commit it came from, so `jobs update --image`
+# names exactly what it deploys and rollback is the previous hash.
+
+substitutions:
+  _REGION: asia-northeast3
+  _REPO: m7
+  _IMAGE: m7-terminal
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest
+      - .
+
+# Pushed only after the build succeeds; a broken commit leaves the registry
+# exactly as it was.
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s

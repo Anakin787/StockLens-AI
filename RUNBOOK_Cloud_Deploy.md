@@ -458,8 +458,115 @@ gcloud run services describe m7-dashboard --region=$REGION --format='value(statu
 
 ---
 
+## 7. 푸시하면 이미지가 자동으로 만들어지게 (빌드만)
+
+`main`에 푸시하면 Cloud Build가 이미지를 만들어 Artifact Registry에 넣는다.
+**거기서 멈춘다** — 돌고 있는 Job은 건드리지 않는다.
+
+왜 배포까지 자동으로 하지 않는가: 이 리포는 실제로 주문을 낸다. 나쁜 커밋이 스스로 다음 스케줄
+실행까지 도달할 수 있으면, 알아채고 멈출 수 있는 시간이 `git push`와 그 실행 사이뿐이다.
+미리 빌드해두는 것이 오히려 수동 배포를 싸게 만든다 — 배포가 빌드를 기다리는 일이 아니라
+**포인터를 바꾸는 몇 초**가 되기 때문이다.
+
+설정은 `cloudbuild.yaml`에 있다.
+
+### 7-1. 트리거 만들기 (최초 1회)
+
+**먼저 GCP 콘솔에서 GitHub 저장소를 연결해야 한다.** OAuth 승인이 필요해서 CLI만으로는 안 된다.
+콘솔 > **Cloud Build > 트리거 > 저장소 연결** > GitHub 선택 > `Anakin787/m7-terminal` 승인.
+
+☁️ **아무 셸이나** — 연결한 뒤
+
+```bash
+gcloud builds triggers create github \
+  --name=m7-build-on-push \
+  --region=$REGION \
+  --repo-owner=Anakin787 --repo-name=m7-terminal \
+  --branch-pattern='^main$' \
+  --build-config=cloudbuild.yaml
+```
+
+확인:
+
+```bash
+gcloud builds triggers list --region=$REGION --format='table(name,github.push.branch,disabled)'
+```
+
+> Cloud Build 서비스계정에 Artifact Registry 쓰기 권한(`roles/artifactregistry.writer`)이 없으면
+> push 단계에서 실패한다. 첫 빌드가 권한 오류로 죽으면 그것부터 확인할 것.
+
+### 7-2. 빌드 결과 확인
+
+☁️ **아무 셸이나**
+
+```bash
+# 최근 빌드 상태
+gcloud builds list --region=$REGION --limit=5 \
+  --format='table(id,status,substitutions.SHORT_SHA,createTime)'
+
+# 실패했으면 로그
+gcloud builds log <BUILD_ID> --region=$REGION
+
+# 레지스트리에 올라온 태그 목록 (최신순)
+gcloud artifacts docker tags list $IMAGE --format='table(tag,version)' | head
+```
+
+빌드는 커밋 해시(`$SHORT_SHA`)와 `latest` 두 개의 태그를 붙인다.
+**배포에는 해시를 쓴다** — `latest`는 사람이 눈으로 최신을 찾기 위한 것이고,
+무엇이 배포됐는지 나중에 말해주지 못한다.
+
+### 7-3. 만들어진 이미지를 배포하기
+
+여기가 사람이 결정하는 지점이다. 빌드는 이미 끝나 있으므로 몇 초면 된다.
+
+☁️ **아무 셸이나** — 리포 파일이 필요 없다. 폰이나 다른 PC의 Cloud Shell에서도 된다
+
+```bash
+# 1. 배포할 커밋을 정한다 (로컬이라면 git rev-parse --short HEAD)
+export TAG=<커밋해시>
+
+# 2. Job을 그 이미지로 가리킨다
+gcloud run jobs update m7-daily --image=${IMAGE}:${TAG} --region=$REGION
+gcloud run jobs update m7-trade --image=${IMAGE}:${TAG} --region=$REGION
+
+# 3. 스케줄을 기다리지 말고 한 번 돌려서 확인한다
+gcloud run jobs execute m7-daily --region=$REGION --wait
+
+# 4. 지금 무엇이 배포돼 있는지
+gcloud run jobs describe m7-daily --region=$REGION \
+  --format='value(template.template.containers[0].image)'
+```
+
+대시보드도 같은 이미지를 쓴다:
+
+```bash
+gcloud run services update m7-dashboard --image=${IMAGE}:${TAG} --region=$REGION
+```
+
+**롤백은 같은 명령에 이전 해시를 넣는 것**이 전부다. 빌드도 재현도 필요 없다.
+
+```bash
+gcloud run jobs update m7-daily --image=${IMAGE}:<이전해시> --region=$REGION
+```
+
+### 7-4. 배포 전 확인할 것
+
+이미지가 만들어졌다는 것은 **빌드가 됐다는 뜻이지, 동작한다는 뜻이 아니다.**
+`cloudbuild.yaml`은 테스트를 돌리지 않는다(에뮬레이터가 필요해서 빌드 환경에서 무겁다).
+
+📁 **로컬 WSL · 리포 루트** — 배포할 커밋에서
+
+```bash
+python3 -m pytest -q
+```
+
+특히 매매 로직(`src/execution/`, `src/strategy/`)을 건드린 커밋은 이걸 통과시키고 배포한다.
+
+---
+
 ## 남은 일
 
 - [ ] **빈 config 가드** — 5장 ⚠️ 항목
 - [ ] **대시보드 배포 실행** — 절차는 6장에 정리됨. 아직 실행하지 않았고, IAP 경로는 미검증
 - [ ] **실패 알림** — Job 실패가 조용히 묻히지 않도록 로그 기반 알림 설정
+- [ ] **빌드 트리거 연결** — `cloudbuild.yaml`은 커밋됨. GitHub 저장소 연결과 트리거 생성은 미실행 (7-1)
