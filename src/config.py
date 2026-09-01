@@ -20,7 +20,11 @@ except ImportError:  # dotenv is optional; env vars still work without it
 
 from src.toss.errors import TossConfigError
 
-DEFAULT_CONFIG_PATH = "config.yaml"
+#: Overridable because the file does not always sit next to the code. On Cloud
+#: Run it arrives as a mounted secret, and it cannot be mounted at
+#: ``/app/config.yaml`` - a volume mount there would shadow the application
+#: directory it lands in. So the deployment says where it put it.
+DEFAULT_CONFIG_PATH = os.environ.get("M7_CONFIG_PATH") or "config.yaml"
 DEFAULT_TOKEN_CACHE = ".toss_token.json"
 DEFAULT_BASE_URL = "https://openapi.tossinvest.com"
 

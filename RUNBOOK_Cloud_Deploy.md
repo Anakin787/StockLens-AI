@@ -50,7 +50,7 @@ export REPO=m7-terminal             # Artifact Registry 저장소 이름
 export SA_EMAIL=m7-run-sa@${PROJECT}.iam.gserviceaccount.com        # Job/Service 실행용
 export SCHED_SA=m7-scheduler-sa@${PROJECT}.iam.gserviceaccount.com  # Scheduler가 Job을 호출
 export BUILD_SA=m7-build-sa@${PROJECT}.iam.gserviceaccount.com      # Cloud Build 전용
-export BUCKET=gs://${PROJECT}-m7-cache
+export BUCKET=gs://${PROJECT}-m7-bars-cache
 export IMAGE=${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/m7-terminal
 ```
 
@@ -110,10 +110,16 @@ gcloud artifacts repositories create $REPO \
 유니버스 백필이 ~5만 write라 무료 티어를 넘긴다). Cloud Run은 실행이 끝나면 디스크가 사라지므로,
 그 파일 하나를 GCS에 주차해 둔다. **잃어버려도 느린 실행 한 번일 뿐, 정합성 문제는 없다.**
 
+> ✅ **완료 (2026-09-01).** 버킷 생성, `bars.db` 21.5MB 업로드, 실행 계정 권한까지.
+
 ☁️ **아무 셸이나** — 버킷 생성
 
 ```bash
 gcloud storage buckets create $BUCKET --location=$REGION
+
+# 실행 계정이 그 파일을 읽고 쓸 수 있게. 프로젝트 전체가 아니라 이 버킷에만 준다
+gcloud storage buckets add-iam-policy-binding $BUCKET \
+  --member="serviceAccount:${SA_EMAIL}" --role="roles/storage.objectAdmin"
 ```
 
 📁 **로컬 WSL · 리포 루트** — 초기 업로드는 `bars.db` 파일이 있는 곳에서 해야 한다
@@ -129,11 +135,10 @@ gcloud storage cp bars.db $BUCKET/bars.db
 ☁️ **아무 셸이나**
 
 ```bash
-# 실행용 - Firestore, GCS(bars.db), Secret Manager
+# 실행용 - Firestore와 Secret Manager. GCS는 0-4에서 버킷 단위로 따로 준다
 gcloud iam service-accounts create m7-run-sa --display-name="M7 Terminal runner"
 for ROLE in \
   roles/datastore.user \
-  roles/storage.objectAdmin \
   roles/secretmanager.secretAccessor
 do
   gcloud projects add-iam-policy-binding $PROJECT \
@@ -166,17 +171,20 @@ gcloud iam service-accounts create m7-scheduler-sa --display-name="M7 Scheduler"
 
 📁 **로컬 WSL · 리포 루트** — `config.yaml`과 `.env` 값을 읽으므로 **반드시 리포 루트에서**
 
+> ✅ **완료 (2026-09-01).** 시크릿 6개가 모두 등록돼 있다. 이름은 `.env`의 변수명을 그대로
+> 쓴다 - `TOSS_CLIENT_ID`, `TOSS_CLIENT_SECRET`, `NOTION_TOKEN`, `NOTION_DATABASE_ID`,
+> `GOOGLE_AI_API_KEY`, 그리고 설정 파일 전체를 담은 `m7-config`.
+
 ```bash
-# config.yaml 통째로 (전략 파라미터 + 자격증명)
+# config.yaml 통째로 (전략 파라미터 + 수동 보유 종목)
 gcloud secrets create m7-config --data-file=config.yaml
 
 # API 키들. .env를 셸에 불러온 뒤 실행한다
 set -a && . ./.env && set +a
-printf '%s' "$TOSS_CLIENT_ID"     | gcloud secrets create toss-client-id --data-file=-
-printf '%s' "$TOSS_CLIENT_SECRET" | gcloud secrets create toss-client-secret --data-file=-
-printf '%s' "$NOTION_TOKEN"       | gcloud secrets create notion-token --data-file=-
-printf '%s' "$NOTION_DATABASE_ID" | gcloud secrets create notion-database-id --data-file=-
-printf '%s' "$GOOGLE_AI_API_KEY"  | gcloud secrets create google-ai-api-key --data-file=-
+for KEY in TOSS_CLIENT_ID TOSS_CLIENT_SECRET NOTION_TOKEN NOTION_DATABASE_ID GOOGLE_AI_API_KEY
+do
+  printf '%s' "$(eval echo \$$KEY)" | gcloud secrets create "$KEY" --data-file=-
+done
 ```
 
 > `printf`는 `echo`와 달리 끝에 개행을 안 붙인다. 토큰 끝에 `\n`이 붙으면 인증이 조용히 실패하므로
@@ -288,18 +296,22 @@ gcloud run jobs create m7-daily \
   --service-account=$SA_EMAIL \
   --args=python,main.py \
   --task-timeout=30m --max-retries=1 \
-  --set-env-vars="M7_BAR_CACHE_GCS_URI=${BUCKET}/bars.db" \
-  --set-secrets="/app/config.yaml=m7-config:latest,\
-TOSS_CLIENT_ID=toss-client-id:latest,\
-TOSS_CLIENT_SECRET=toss-client-secret:latest,\
-NOTION_TOKEN=notion-token:latest,\
-NOTION_DATABASE_ID=notion-database-id:latest,\
-GOOGLE_AI_API_KEY=google-ai-api-key:latest"
+  --set-env-vars="M7_BAR_CACHE_GCS_URI=${BUCKET}/bars.db,M7_CONFIG_PATH=/secrets/config.yaml" \
+  --set-secrets="/secrets/config.yaml=m7-config:latest,\
+TOSS_CLIENT_ID=TOSS_CLIENT_ID:latest,\
+TOSS_CLIENT_SECRET=TOSS_CLIENT_SECRET:latest,\
+NOTION_TOKEN=NOTION_TOKEN:latest,\
+NOTION_DATABASE_ID=NOTION_DATABASE_ID:latest,\
+GOOGLE_AI_API_KEY=GOOGLE_AI_API_KEY:latest"
 
 # 매매 엔진 (trade.py) — 위와 동일하되 이름과 인자만 다르다
 gcloud run jobs create m7-trade \
   ... --args=python,trade.py
 ```
+
+> **`config.yaml`은 `/secrets/`에 마운트한다.** Cloud Run의 시크릿 볼륨은 마운트 지점이 속한
+> 디렉터리를 덮으므로, `/app/config.yaml`로 걸면 애플리케이션 코드가 통째로 가려질 수 있다.
+> 앱은 `M7_CONFIG_PATH`로 그 위치를 전달받는다.
 
 > **`--command`는 쓰지 말 것.** ENTRYPOINT를 덮어써서 `entrypoint.sh`를 건너뛰게 되고,
 > 그러면 bars.db GCS 동기화가 사라져 매 실행마다 유니버스 전체를 다시 받는다. 반드시 `--args`만 쓴다.
@@ -378,7 +390,7 @@ gcloud run jobs update m7-daily --image=${IMAGE}:<이전해시> --region=$REGION
 | `$PROJECT`가 빈 값으로 들어가 실패 | 터미널을 새로 열고 "공통 변수" `export`를 다시 안 붙여넣음 |
 | 엉뚱한 내용이 배포됨 | 📁 명령을 리포 루트 밖에서 실행. `--source .`는 "지금 폴더"를 올린다 |
 | `403 edge-blocked` | 토스 허용 IP. 클라우드 IP가 등록돼 있는지 확인 (0-7) |
-| 에러 없이 이상한 설정으로 매매 | `config.yaml` 마운트 누락. 아래 ⚠️ 참고 |
+| 에러 없이 이상한 설정으로 매매 | `config.yaml` 마운트 누락. 이제는 `require_config_file`이 중단시킨다 |
 | 매 실행마다 Yahoo 재다운로드 | `M7_BAR_CACHE_GCS_URI` 미설정, 또는 `--command`로 entrypoint를 덮어씀 |
 | Firestore 권한 오류 | 서비스계정에 `roles/datastore.user` 누락 |
 | 급히 멈춰야 함 | 대시보드에서 킬 스위치 ON. Firestore `system/kill_switch` 문서 — **재배포 불필요, 즉시 반영** |
@@ -417,9 +429,10 @@ gcloud run deploy m7-dashboard --source . --region=$REGION \
   --port=8080 \
   --no-allow-unauthenticated \
   --min-instances=0 \
-  --set-secrets="/app/config.yaml=m7-config:latest,\
-TOSS_CLIENT_ID=toss-client-id:latest,\
-TOSS_CLIENT_SECRET=toss-client-secret:latest"
+  --set-env-vars="M7_CONFIG_PATH=/secrets/config.yaml" \
+  --set-secrets="/secrets/config.yaml=m7-config:latest,\
+TOSS_CLIENT_ID=TOSS_CLIENT_ID:latest,\
+TOSS_CLIENT_SECRET=TOSS_CLIENT_SECRET:latest"
 ```
 
 포인트 넷:
