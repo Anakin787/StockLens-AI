@@ -504,13 +504,33 @@ Notion/AI 키는 대시보드가 쓰지 않으므로 뺐다. 화면에서 뭔가
 > **원인 추정: OAuth 클라이언트가 없다.** 브랜딩만 만들어졌고 클라이언트는 생성되지 않은
 > 상태다. IAP가 로그인 화면을 띄울 클라이언트가 없으니 502가 난다.
 >
-> **다음에 할 일** - [클라이언트 페이지](https://console.cloud.google.com/auth/clients?project=quant-81f19)에서:
-> 1. 클라이언트 만들기 > **웹 애플리케이션** > 이름 `M7 Terminal IAP` (리디렉션 URI는 비워둔 채)
-> 2. 생성된 클라이언트 ID를 복사해 그 클라이언트의 **승인된 리디렉션 URI**에 추가:
->    `https://iap.googleapis.com/v1/oauth/clientIds/<클라이언트ID>:handleRedirect`
-> 3. [IAP 페이지](https://console.cloud.google.com/security/iap?project=quant-81f19)에서
+> **클라이언트는 생성됨.** ID (비밀이 아니다 - 브라우저 흐름에 그대로 노출되는 값):
+> `633981904995-hs1j2joo9c5p3plafijda813dii6pq3l.apps.googleusercontent.com`
+> **클라이언트 보안 비밀은 절대 여기 적지 않는다.**
+>
+> **다음에 할 일**
+> 1. [클라이언트 페이지](https://console.cloud.google.com/auth/clients?project=quant-81f19)에서
+>    위 클라이언트를 열고 **승인된 리디렉션 URI**에 이 값을 그대로 추가:
+>
+>    ```
+>    https://iap.googleapis.com/v1/oauth/clientIds/633981904995-hs1j2joo9c5p3plafijda813dii6pq3l.apps.googleusercontent.com:handleRedirect
+>    ```
+>
+> 2. [IAP 페이지](https://console.cloud.google.com/security/iap?project=quant-81f19)에서
 >    `m7-dashboard` 행의 ⋮ 메뉴로 그 클라이언트를 연결. 메뉴가 없으면 IAP를 껐다 켜서
->    새 클라이언트를 집게 한다.
+>    새 클라이언트를 집게 한다:
+>
+>    ```bash
+>    gcloud beta run services update m7-dashboard --region=asia-northeast3 --no-iap
+>    gcloud beta run services update m7-dashboard --region=asia-northeast3 --iap
+>    ```
+>
+> 3. 확인 - 502가 아니라 **302**(구글 로그인으로 리다이렉트)가 나와야 성공이다.
+>    브라우저는 로그인된 창에서 통과해버리므로 **시크릿 창**에서 볼 것.
+>
+>    ```bash
+>    curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" https://m7-dashboard-ofhlnvd7jq-du.a.run.app
+>    ```
 >
 > **CLI로는 더 진단할 수 없다.** IAP OAuth 관리 API가 2026-03-19에 영구 종료됐고,
 > `gcloud iap oauth-brands list`는 "Project must belong to an organization"으로 거부된다.
