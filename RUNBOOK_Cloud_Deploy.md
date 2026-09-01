@@ -203,8 +203,10 @@ gcloud secrets versions add m7-config --data-file=config.yaml
 등록되지 않은 IP의 API 호출은 `403 edge-blocked`로 **전량 차단**된다(README 59행).
 Cloud Run의 아웃바운드 IP는 기본적으로 동적이므로, 고정 IP를 만들어 그 IP를 등록해야 한다.
 
-> ✅ **IP 등록은 완료됨.** 다만 등록한 IP가 **PC의 공인 IP**라면 Cloud Run에서는 통하지 않는다.
-> 클라우드에서 처음 돌릴 때 `403`이 나오면 아래로 NAT 고정 IP를 만들어 그 주소를 추가 등록한다.
+> ✅ **완료 (2026-09-01).** 고정 IP `34.22.70.110`, Cloud Router `m7-router`, NAT `m7-nat`이
+> 모두 있고 토스에도 등록돼 있다. 실제 실행으로 403이 사라진 것까지 확인했다.
+> **단, Job 쪽에 VPC egress를 붙여야 이 IP로 나간다** (2장 참고) - 인프라만 있고 Job이
+> 연결돼 있지 않으면 여전히 403이다.
 
 ☁️ **아무 셸이나** — 필요해졌을 때만
 
@@ -287,15 +289,19 @@ gcloud run jobs update m7-daily --image=${IMAGE}:${TAG} --region=$REGION   # ←
 
 `ENTRYPOINT`가 `entrypoint.sh`이고 그 안에서 `"$@"`를 실행하므로, **컨테이너 인자가 곧 실행할 명령**이다.
 
+> ✅ **`m7-daily` 생성·검증 완료 (2026-09-01).** 실행 성공, Notion 리포트 발행, 스냅샷 저장까지
+> 확인. `m7-trade`는 아직 만들지 않았다.
+
 ☁️ **아무 셸이나** — 이미 올라간 이미지를 가리키기만 하므로 리포 파일이 필요 없다
 
 ```bash
 # 일일 리포트 (main.py)
 gcloud run jobs create m7-daily \
-  --image=${IMAGE}:latest --region=$REGION \
+  --image=${IMAGE}:<커밋해시> --region=$REGION \
   --service-account=$SA_EMAIL \
   --args=python,main.py \
-  --task-timeout=30m --max-retries=1 \
+  --task-timeout=30m --max-retries=1 --memory=2Gi \
+  --network=default --subnet=m7-run-subnet --vpc-egress=all-traffic \
   --set-env-vars="M7_BAR_CACHE_GCS_URI=${BUCKET}/bars.db,M7_CONFIG_PATH=/secrets/config.yaml" \
   --set-secrets="/secrets/config.yaml=m7-config:latest,\
 TOSS_CLIENT_ID=TOSS_CLIENT_ID:latest,\
@@ -308,6 +314,10 @@ GOOGLE_AI_API_KEY=GOOGLE_AI_API_KEY:latest"
 gcloud run jobs create m7-trade \
   ... --args=python,trade.py
 ```
+
+> **VPC 설정을 빠뜨리면 토스가 403으로 막는다.** 기본 상태의 Cloud Run은 나갈 때마다 IP가
+> 바뀌므로 허용 IP 목록에 걸릴 수 없다. `--network/--subnet/--vpc-egress=all-traffic`을 붙여야
+> NAT의 고정 IP(0-7)로 나간다. 이걸 빼고 만든 첫 Job이 정확히 이 이유로 실패했다.
 
 > **`config.yaml`은 `/secrets/`에 마운트한다.** Cloud Run의 시크릿 볼륨은 마운트 지점이 속한
 > 디렉터리를 덮으므로, `/app/config.yaml`로 걸면 애플리케이션 코드가 통째로 가려질 수 있다.
@@ -393,7 +403,29 @@ gcloud run jobs update m7-daily --image=${IMAGE}:<이전해시> --region=$REGION
 | 에러 없이 이상한 설정으로 매매 | `config.yaml` 마운트 누락. 이제는 `require_config_file`이 중단시킨다 |
 | 매 실행마다 Yahoo 재다운로드 | `M7_BAR_CACHE_GCS_URI` 미설정, 또는 `--command`로 entrypoint를 덮어씀 |
 | Firestore 권한 오류 | 서비스계정에 `roles/datastore.user` 누락 |
+| API 키가 유효하지 않다는데 로컬은 됨 | 시크릿에 잘못된 값이 들어간 것. 아래로 길이를 비교한다 |
 | 급히 멈춰야 함 | 대시보드에서 킬 스위치 ON. Firestore `system/kill_switch` 문서 — **재배포 불필요, 즉시 반영** |
+
+시크릿 값이 `.env`와 같은지는 값을 화면에 띄우지 않고 길이로 확인할 수 있다. 실제로
+`GOOGLE_AI_API_KEY`에 20바이트짜리 엉뚱한 값이 들어가 AI 분석만 조용히 실패한 적이 있다.
+
+📁 **로컬 WSL · 리포 루트**
+
+```bash
+set -a && . ./.env && set +a
+for K in TOSS_CLIENT_ID TOSS_CLIENT_SECRET NOTION_TOKEN NOTION_DATABASE_ID GOOGLE_AI_API_KEY
+do
+  L=$(eval echo -n "\${#$K}")
+  S=$(gcloud secrets versions access latest --secret=$K | wc -c)
+  [ "$L" = "$S" ] && echo "$K 일치" || echo "$K 불일치 (.env=$L, secret=$S)"
+done
+```
+
+고칠 때는 새 버전만 추가하면 된다. Job은 `:latest`를 보므로 **재배포가 필요 없다.**
+
+```bash
+printf '%s' "$GOOGLE_AI_API_KEY" | gcloud secrets versions add GOOGLE_AI_API_KEY --data-file=-
+```
 
 > ⚠️ **`config.yaml`이 없어도 크래시하지 않는다.** `_load_yaml()`은 파일이 없으면 빈 dict를
 > 반환한다(`src/config.py:268`). 즉 마운트를 깜빡하면 의도한 전략이 아닌 기본값으로 조용히 주문이
