@@ -74,7 +74,7 @@ def build_context(
         price_limits=_price_limits(service, wanted),
         sessions=_sessions(service, now),
         daily_usage=store.daily_usage(now.strftime("%Y-%m-%d")),
-        kill_switch=kill_switch_active(kill_switch_path),
+        kill_switch=kill_switch_active(kill_switch_path, store=store),
         blocked_symbols=_blocked_symbols(store, now),
         history=history or {},
         recent=tuple(recent),

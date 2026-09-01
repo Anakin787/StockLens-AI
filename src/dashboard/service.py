@@ -84,9 +84,10 @@ def _make_previous_close_fn():
 
     Manual holdings carry no "today's change" field in the Toss price feed,
     so their daily P&L has to be derived against the last completed daily
-    bar. Bars come from the shared Firestore cache, topped up from yfinance
-    only when stale. The loader is built lazily on first use so importing
-    this module never pulls in yfinance or opens a second Firestore client.
+    bar. Bars come from the local SQLite cache (``src/data/cache.py``, the one
+    part of the store deliberately *not* in Firestore), topped up from yfinance
+    only when stale. The loader is built lazily on first use so importing this
+    module never pulls in yfinance or opens the cache file.
     """
     state = {}
 
@@ -378,7 +379,7 @@ class DashboardService:
         from src.execution.risk import kill_switch_state
 
         trading = self.config.trading
-        state = kill_switch_state(trading.kill_switch_path)
+        state = kill_switch_state(trading.kill_switch_path, store=self.store)
         return {
             "engine_enabled": trading.enabled,
             "strategies": list(trading.strategies),
@@ -404,13 +405,15 @@ class DashboardService:
         )
 
         path = self.config.trading.kill_switch_path
-        was_active = kill_switch_state(path)["active"]
+        was_active = kill_switch_state(path, store=self.store)["active"]
 
         if active:
-            state = engage_kill_switch(path, reason=reason, actor=actor or "dashboard")
+            state = engage_kill_switch(
+                path, reason=reason, actor=actor or "dashboard", store=self.store
+            )
         else:
-            release_kill_switch(path)
-            state = kill_switch_state(path)
+            release_kill_switch(path, store=self.store)
+            state = kill_switch_state(path, store=self.store)
 
         if state["active"] != was_active:
             try:

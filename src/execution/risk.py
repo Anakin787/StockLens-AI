@@ -36,29 +36,87 @@ _KILL_SWITCH_DEFAULT = "KILL_SWITCH"
 
 _CURRENCY_COUNTRY = {"KRW": "KR", "USD": "US"}
 
+#: Where the cloud-side switch lives. The trading engine may now run on a
+#: machine with no local filesystem worth touching (Cloud Run), so the file
+#: alone can no longer be *the* source of truth - only *a* source of truth.
+_FIRESTORE_COLLECTION = "system"
+_FIRESTORE_DOCUMENT = "kill_switch"
 
-def kill_switch_active(path=_KILL_SWITCH_DEFAULT):
-    """True when the kill-switch file exists.
+
+def _firestore_doc(store):
+    return store.client.collection(_FIRESTORE_COLLECTION).document(_FIRESTORE_DOCUMENT)
+
+
+def _read_firestore_state(store):
+    """The Firestore-side switch, or active (fail-closed) if unreadable.
+
+    An unreachable store answers the same question strict mode does for a
+    missing quote: an unverifiable stop condition is not the same as no stop
+    condition, so a read failure here must not silently let trading continue.
+    """
+    try:
+        snapshot = _firestore_doc(store).get()
+    except Exception:  # noqa: BLE001 - network/auth failure, treat as engaged
+        return {
+            "active": True,
+            "path": f"firestore:{_FIRESTORE_COLLECTION}/{_FIRESTORE_DOCUMENT}",
+            "engaged_at": None,
+            "engaged_at_source": "unreachable",
+            "actor": None,
+            "reason": "Firestore 킬 스위치 문서를 읽을 수 없습니다.",
+        }
+
+    data = snapshot.to_dict() if snapshot.exists else None
+    if not data or not data.get("active"):
+        return {
+            "active": False,
+            "path": f"firestore:{_FIRESTORE_COLLECTION}/{_FIRESTORE_DOCUMENT}",
+            "engaged_at": None,
+            "engaged_at_source": None,
+            "actor": None,
+            "reason": None,
+        }
+
+    return {
+        "active": True,
+        "path": f"firestore:{_FIRESTORE_COLLECTION}/{_FIRESTORE_DOCUMENT}",
+        "engaged_at": data.get("engaged_at"),
+        "engaged_at_source": "firestore",
+        "actor": data.get("by"),
+        "reason": data.get("reason") or None,
+    }
+
+
+def kill_switch_active(path=_KILL_SWITCH_DEFAULT, store=None):
+    """True when either the kill-switch file or the Firestore doc says stop.
 
     The one piece of I/O in this module, kept as a free function so the gate
     itself stays pure - callers resolve it once and set ``ctx.kill_switch``.
     A file is used rather than a config flag on purpose: stopping the engine
     must not require editing code, restarting a process, or being able to log
-    in to anything.
+    in to anything. ``store`` is optional and additive - when omitted this is
+    exactly the local-file check it always was.
     """
-    return os.path.exists(path)
+    if os.path.exists(path):
+        return True
+    if store is None:
+        return False
+    return _read_firestore_state(store)["active"]
 
 
-def kill_switch_state(path=_KILL_SWITCH_DEFAULT):
-    """What the kill switch file says, for anything that has to display it.
+def kill_switch_state(path=_KILL_SWITCH_DEFAULT, store=None):
+    """What the kill switch says, for anything that has to display it.
 
-    The file is the source of truth about *whether* trading is stopped; its
-    contents are only ever about *why*, and they are optional. A file made by
-    hand (``touch KILL_SWITCH``) is as valid a stop as one written here, so a
-    missing header is filled in from the file's mtime and labelled as such
-    rather than left blank or, worse, guessed at.
+    The file is checked first: a file made by hand (``touch KILL_SWITCH``) is
+    as valid a stop as one written here, so a missing header is filled in
+    from the file's mtime and labelled as such rather than left blank or,
+    worse, guessed at. Only when the file is absent does the Firestore doc
+    (the switch a Cloud Run job actually sees, since it has no persistent
+    local disk to touch) get consulted.
     """
     if not os.path.exists(path):
+        if store is not None:
+            return _read_firestore_state(store)
         return {
             "active": False,
             "path": path,
@@ -99,13 +157,17 @@ def kill_switch_state(path=_KILL_SWITCH_DEFAULT):
     }
 
 
-def engage_kill_switch(path=_KILL_SWITCH_DEFAULT, reason=None, actor=None, at=None):
+def engage_kill_switch(path=_KILL_SWITCH_DEFAULT, reason=None, actor=None, at=None, store=None):
     """Stop the engine by creating the file, and record why in it.
 
     Writing the reason into the file rather than only into the audit log
     matters for the case this switch exists for: somebody stops trading from
     one machine and somebody else - or the same person a week later - finds
     the file on another. The stop has to explain itself where it lives.
+
+    When ``store`` is given, the same stop is also written to Firestore -
+    the dashboard runs locally but the trading engine it is stopping may now
+    run on Cloud Run, where this local file is invisible.
     """
     at = at or datetime.now()
     lines = [f"engaged_at: {at.isoformat(timespec='seconds')}"]
@@ -115,16 +177,43 @@ def engage_kill_switch(path=_KILL_SWITCH_DEFAULT, reason=None, actor=None, at=No
         lines.append(f"reason: {' '.join(str(reason).split())}")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
-    return kill_switch_state(path)
+
+    if store is not None:
+        try:
+            _firestore_doc(store).set(
+                {
+                    "active": True,
+                    "engaged_at": at.isoformat(timespec="seconds"),
+                    "by": actor,
+                    "reason": str(reason).strip() if reason else None,
+                }
+            )
+        except Exception:  # noqa: BLE001 - the local file already stopped it
+            pass
+
+    return kill_switch_state(path, store=store)
 
 
-def release_kill_switch(path=_KILL_SWITCH_DEFAULT):
-    """Remove the file. True if it was there, False if it already was not."""
+def release_kill_switch(path=_KILL_SWITCH_DEFAULT, store=None):
+    """Remove the file (and the Firestore doc, if given).
+
+    True if the file was there, False if it already was not - unchanged
+    from before ``store`` existed, since that return value is what callers
+    key an audit transition off of.
+    """
     try:
         os.remove(path)
-        return True
+        removed = True
     except FileNotFoundError:
-        return False
+        removed = False
+
+    if store is not None:
+        try:
+            _firestore_doc(store).set({"active": False}, merge=True)
+        except Exception:  # noqa: BLE001 - the local file already released it
+            pass
+
+    return removed
 
 
 @dataclass(frozen=True)
