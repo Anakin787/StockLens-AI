@@ -20,7 +20,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from src.config import load_config
+from src.config import ConfigFileMissing, load_config, require_config_file
 from src.audit import record_config_changes
 from src.data.cache import BarCache
 from src.data.loader import HistoryLoader
@@ -137,6 +137,9 @@ def run(argv=None):
         )
         return EXIT_LIVE_BLOCKED
 
+    # Strategies, limits and the universe all come from config.yaml. Running
+    # without it would not trade - it would silently do nothing and look fine.
+    require_config_file()
     config = load_config()
 
     if args.reconcile:
@@ -279,6 +282,9 @@ def _report_rejections(rejections):
 def main(argv=None):
     try:
         return run(argv)
+    except ConfigFileMissing as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_UNEXPECTED
     except TossError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_TOSS_ERROR

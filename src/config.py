@@ -539,6 +539,38 @@ def _fix_service_account_env(root=None):
     return resolved
 
 
+class ConfigFileMissing(RuntimeError):
+    """A batch entrypoint was asked to run without its config file."""
+
+
+def require_config_file(path=DEFAULT_CONFIG_PATH):
+    """Refuse to start a batch run on a config file that never loaded.
+
+    ``load_config`` is deliberately permissive - environment variables alone
+    are a valid configuration and the tests rely on that. But main.py and
+    trade.py read the *portfolio* from this file, so a missing one does not
+    mean "no settings", it means "no holdings": the run would succeed and
+    record a portfolio worth nothing.
+
+    That is not hypothetical. On 2026-09-01 a container that had every
+    credential but no config.yaml wrote two snapshots of 0 KRW into the live
+    chart - the credentials were in the environment, so the FX rate came back
+    fine and nothing looked wrong until the chart fell off a cliff.
+    """
+    if not os.path.exists(path):
+        raise ConfigFileMissing(
+            f"설정 파일을 찾을 수 없습니다: {path}\n"
+            "       자격증명은 환경변수로 충분하지만 보유 종목은 이 파일에만 있습니다.\n"
+            "       이대로 실행하면 '자산 0원'이 정상 결과로 기록됩니다.\n"
+            "       컨테이너라면 config.yaml을 /app/config.yaml 로 마운트하세요."
+        )
+    if not _load_yaml(path):
+        raise ConfigFileMissing(
+            f"설정 파일이 비어 있습니다: {path}\n"
+            "       빈 설정은 보유 종목이 없는 것과 구분되지 않습니다."
+        )
+
+
 def load_config(path=DEFAULT_CONFIG_PATH, load_env=True):
     """Build an AppConfig from .env plus config.yaml."""
     if load_env and load_dotenv is not None:

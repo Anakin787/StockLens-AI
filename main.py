@@ -16,7 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from src.analyst import Analyst
 from src.audit import record_config_changes, review_entries
-from src.config import load_config
+from src.config import ConfigFileMissing, load_config, require_config_file
 from src.news import NewsFetcher, portfolio_keywords
 from src.notion import NotionReporter
 from src.pipeline import PortfolioService, apply_name_overrides
@@ -92,6 +92,9 @@ def _review_universe(config, snapshot, news_data, store):
 def run():
     print(">>> Starting Financial Reporter...")
 
+    # The holdings live in config.yaml, so a missing one is not "no settings",
+    # it is "no portfolio" - and that records as a real 0 KRW day.
+    require_config_file()
     config = load_config()
 
     # 1. Portfolio: Toss account (automatic) + manual entries for holdings
@@ -188,6 +191,9 @@ def run():
 def main():
     try:
         return run()
+    except ConfigFileMissing as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
     except TossError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

@@ -9,7 +9,7 @@ double is a float and would reintroduce exactly the rounding drift the
 Decimal pipeline removes. Read them back through Decimal.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from google.api_core.exceptions import AlreadyExists
@@ -49,9 +49,27 @@ def _json_safe(value):
     return value
 
 
+#: Every timestamp in this store is Seoul wall-clock, written naive so the
+#: string format stays byte-identical to the rows already in Firestore (these
+#: strings are document IDs and are range-queried as text). A fixed +09:00 is
+#: exact - Korea has no DST - and needs no tzdata, which a slim container has
+#: no reason to carry. ``datetime.now()`` would follow the host: fine on the
+#: PC this started on, nine hours off inside a UTC container, which would
+#: interleave new rows with the old ones in the wrong order.
+_KST = timezone(timedelta(hours=9))
+
+
+def _clock():
+    return datetime.now(_KST).replace(tzinfo=None)
+
+
 def _now(precise=False):
-    now = datetime.now()
+    now = _clock()
     return now.isoformat() if precise else now.replace(microsecond=0).isoformat()
+
+
+class EmptySnapshot(ValueError):
+    """A snapshot with nothing in it, refused before it reaches the chart."""
 
 
 class Store:
@@ -61,7 +79,19 @@ class Store:
     # ------------------------------------------------------------- snapshots
 
     def save_snapshot(self, snapshot, ts=None):
-        """Write one snapshot, keyed by ``ts`` so re-runs overwrite in place."""
+        """Write one snapshot, keyed by ``ts`` so re-runs overwrite in place.
+
+        An empty snapshot is refused rather than stored. The chart cannot be
+        backfilled, so a bad row is permanent until someone deletes it by
+        hand, and "no holdings" is far more often a misconfigured run than a
+        liquidated account - see ``require_config_file``.
+        """
+        if not snapshot.positions and to_decimal(snapshot.total_krw, default=0) <= 0:
+            raise EmptySnapshot(
+                "보유 종목이 없고 총자산도 0원인 스냅샷은 저장하지 않습니다. "
+                "설정이 실제로 읽혔는지 확인하세요."
+            )
+
         ts = ts or _now()
         doc = self.client.collection("snapshots").document(ts)
         doc.set(
@@ -107,7 +137,7 @@ class Store:
         days = RANGE_DAYS.get(str(range_key).upper(), 90)
         query = self.client.collection("snapshots")
         if days is not None:
-            since = (datetime.now() - timedelta(days=days)).replace(microsecond=0)
+            since = (_clock() - timedelta(days=days)).replace(microsecond=0)
             query = query.where(filter=FieldFilter("ts", ">=", since.isoformat()))
         query = query.order_by("ts")
 
@@ -284,7 +314,7 @@ class Store:
         every other range scan in this module is: a composite index per
         deployment is real setup friction for a collection this small.
         """
-        now = (now or datetime.now()).isoformat()
+        now = (now or _clock()).isoformat()
         active = {}
         for doc in self.client.collection("universe_vetoes").stream():
             data = doc.to_dict() or {}
@@ -379,7 +409,7 @@ class Store:
         order volume here is small enough that this is simpler, and it keeps
         the total on Decimal instead of a server-side float.
         """
-        day = day or datetime.now().strftime("%Y-%m-%d")
+        day = day or _clock().strftime("%Y-%m-%d")
         next_day = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime(
             "%Y-%m-%d"
         )
