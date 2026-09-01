@@ -46,12 +46,17 @@ gcloud run jobs deploy m7-daily --source . --region asia-northeast3
 ```bash
 export PROJECT=quant-81f19          # .firebaserc의 default 프로젝트
 export REGION=asia-northeast3       # 서울. Firestore 리전과 맞출 것 (0-1 참고)
-export REPO=m7                      # Artifact Registry 저장소 이름
-export SA=m7-runner                 # 실행용 서비스계정 이름
-export SA_EMAIL=${SA}@${PROJECT}.iam.gserviceaccount.com
+export REPO=m7-terminal             # Artifact Registry 저장소 이름
+export SA_EMAIL=m7-run-sa@${PROJECT}.iam.gserviceaccount.com        # Job/Service 실행용
+export SCHED_SA=m7-scheduler-sa@${PROJECT}.iam.gserviceaccount.com  # Scheduler가 Job을 호출
+export BUILD_SA=m7-build-sa@${PROJECT}.iam.gserviceaccount.com      # Cloud Build 전용
 export BUCKET=gs://${PROJECT}-m7-cache
 export IMAGE=${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/m7-terminal
 ```
+
+> 서비스계정이 셋인 것은 권한을 나누기 위해서다. 빌드는 이미지를 올리고 로그를 쓸 수만 있으면
+> 되고, 실행은 Firestore·GCS·Secret에 닿아야 하며, 스케줄러는 Job을 부르는 것 외에 아무것도
+> 할 필요가 없다. 하나로 합치면 편하지만, 그 하나가 새면 전부 새는 계정이 된다.
 
 > `export`는 그 터미널 창에만 유효하다. 창을 닫았다 열면 값이 사라지므로,
 > 아래 명령에서 `$PROJECT`가 빈 값으로 들어가 이상하게 실패하면 이걸 다시 붙여넣었는지부터 확인한다.
@@ -124,8 +129,8 @@ gcloud storage cp bars.db $BUCKET/bars.db
 ☁️ **아무 셸이나**
 
 ```bash
-gcloud iam service-accounts create $SA --display-name="M7 Terminal runner"
-
+# 실행용 - Firestore, GCS(bars.db), Secret Manager
+gcloud iam service-accounts create m7-run-sa --display-name="M7 Terminal runner"
 for ROLE in \
   roles/datastore.user \
   roles/storage.objectAdmin \
@@ -134,7 +139,23 @@ do
   gcloud projects add-iam-policy-binding $PROJECT \
     --member="serviceAccount:${SA_EMAIL}" --role="$ROLE"
 done
+
+# 빌드용 - 이미지를 올리고 로그를 쓰는 것이 전부
+gcloud iam service-accounts create m7-build-sa --display-name="M7 Cloud Build"
+for ROLE in roles/artifactregistry.writer roles/logging.logWriter
+do
+  gcloud projects add-iam-policy-binding $PROJECT \
+    --member="serviceAccount:${BUILD_SA}" --role="$ROLE"
+done
+
+# 스케줄러용 - Job을 호출하는 것 외에는 아무것도
+gcloud iam service-accounts create m7-scheduler-sa --display-name="M7 Scheduler"
 ```
+
+> 레거시 `<번호>@cloudbuild.gserviceaccount.com` 계정은 **이 프로젝트에 없다.** 최근 만들어진
+> 프로젝트는 그 계정을 만들지 않고 서비스계정을 직접 지정하게 바뀌었으므로, 빌드 권한은 위의
+> `m7-build-sa`에 준다. `logging.logWriter`가 빠지면 `cloudbuild.yaml`이
+> `CLOUD_LOGGING_ONLY`라 빌드가 시작하자마자 실패한다.
 
 > **서비스계정 JSON 키는 만들지 않는다.** Cloud Run에서는 붙여둔 서비스계정으로 ADC가 자동 동작하므로
 > `GOOGLE_APPLICATION_CREDENTIALS`가 필요 없다. 그 변수는 로컬 개발 전용이다.
@@ -314,11 +335,11 @@ gcloud scheduler jobs create http m7-daily-schedule \
   --time-zone="Asia/Seoul" \
   --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/m7-daily:run" \
   --http-method=POST \
-  --oauth-service-account-email=$SA_EMAIL
+  --oauth-service-account-email=$SCHED_SA
 
 # Scheduler가 Job을 실행하려면 이 권한이 필요하다
 gcloud run jobs add-iam-policy-binding m7-daily \
-  --member="serviceAccount:${SA_EMAIL}" --role="roles/run.invoker" --region=$REGION
+  --member="serviceAccount:${SCHED_SA}" --role="roles/run.invoker" --region=$REGION
 ```
 
 시간은 실제 운용에 맞춰 조정할 것. 리밸런싱 요일은 `config.yaml`의 `rebalance_weekday`가
@@ -470,30 +491,49 @@ gcloud run services describe m7-dashboard --region=$REGION --format='value(statu
 
 설정은 `cloudbuild.yaml`에 있다.
 
-### 7-1. 트리거 만들기 (최초 1회)
+### 7-1. 트리거 만들기 (최초 1회 — 완료됨)
 
-**먼저 GCP 콘솔에서 GitHub 저장소를 연결해야 한다.** OAuth 승인이 필요해서 CLI만으로는 안 된다.
-콘솔 > **Cloud Build > 트리거 > 저장소 연결** > GitHub 선택 > `Anakin787/m7-terminal` 승인.
+**2026-09-01에 설정 완료.** 다시 만들 일이 생겼을 때를 위해 절차를 남긴다.
 
-☁️ **아무 셸이나** — 연결한 뒤
+**GitHub 연결은 콘솔에서만 된다.** 권한을 주는 주체가 GitHub이라 OAuth 승인이 필요하고,
+`gcloud`가 대신할 수 없다. 연결하면 GitHub에 Cloud Build 앱이 설치되어 ① 푸시 웹훅과
+② 저장소 읽기 권한을 얻는다.
+
+**1) 저장소 연결** — 셋 중 아무거나. 콘솔 창이 좁으면 버튼이 접혀 안 보이니 창을 넓힐 것.
+
+- [연결 마법사](https://console.cloud.google.com/cloud-build/triggers/connect?project=quant-81f19) 직행
+- GitHub에서 먼저 설치: [github.com/apps/google-cloud-build](https://github.com/apps/google-cloud-build)
+  → Anakin787 → **Only select repositories** → `m7-terminal`만 체크
+- [트리거](https://console.cloud.google.com/cloud-build/triggers?project=quant-81f19) >
+  트리거 만들기 > 소스 드롭다운 > **새 저장소 연결**
+
+**1세대**를 쓴다. 리전은 **`global (전역)`** — 2세대는 트리거 인자 형식이 달라 굳이 복잡해진다.
+`호스트 연결`은 GitHub Enterprise/자체 호스팅용이니 건드리지 않는다.
+
+**2) 트리거 폼**
+
+| 항목 | 값 |
+|---|---|
+| 이름 | `m7-build-on-push` |
+| 리전 | `global (전역)` — 연결과 같아야 한다 |
+| 이벤트 | 브랜치로 푸시 |
+| 소스 | `Anakin787/m7-terminal (1세대)`, 브랜치 `^main$` |
+| 구성 유형 | **Cloud Build 구성 파일(YAML)** — 자동 감지 아님 |
+| 구성 파일 위치 | `cloudbuild.yaml` |
+| 서비스 계정 | `m7-build-sa@quant-81f19.iam.gserviceaccount.com` |
+
+"샘플 트리거"는 쓰지 않는다. 빌드 구성이 "자동 감지"라 `cloudbuild.yaml`을 무시하고,
+태그가 커밋 해시로 붙지 않으며 브랜치도 `main` 한정이 아니다.
+
+☁️ **아무 셸이나** — 확인
 
 ```bash
-gcloud builds triggers create github \
-  --name=m7-build-on-push \
-  --region=$REGION \
-  --repo-owner=Anakin787 --repo-name=m7-terminal \
-  --branch-pattern='^main$' \
-  --build-config=cloudbuild.yaml
+gcloud builds triggers list --region=global \
+  --format='table(name,github.push.branch,filename,serviceAccount)'
 ```
 
-확인:
-
-```bash
-gcloud builds triggers list --region=$REGION --format='table(name,github.push.branch,disabled)'
-```
-
-> Cloud Build 서비스계정에 Artifact Registry 쓰기 권한(`roles/artifactregistry.writer`)이 없으면
-> push 단계에서 실패한다. 첫 빌드가 권한 오류로 죽으면 그것부터 확인할 것.
+> **리전은 `global`이다.** 이미지가 올라가는 Artifact Registry(asia-northeast3)와는 별개이고,
+> 서로 달라도 정상이다. `--region=asia-northeast3`으로 조회하면 아무것도 안 나온다.
 
 ### 7-2. 빌드 결과 확인
 
@@ -569,4 +609,3 @@ python3 -m pytest -q
 - [ ] **빈 config 가드** — 5장 ⚠️ 항목
 - [ ] **대시보드 배포 실행** — 절차는 6장에 정리됨. 아직 실행하지 않았고, IAP 경로는 미검증
 - [ ] **실패 알림** — Job 실패가 조용히 묻히지 않도록 로그 기반 알림 설정
-- [ ] **빌드 트리거 연결** — `cloudbuild.yaml`은 커밋됨. GitHub 저장소 연결과 트리거 생성은 미실행 (7-1)

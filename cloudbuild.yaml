@@ -12,7 +12,7 @@
 
 substitutions:
   _REGION: asia-northeast3
-  _REPO: m7
+  _REPO: m7-terminal    # Artifact Registry 저장소 이름 (이미지 이름과 같다)
   _IMAGE: m7-terminal
 
 steps:
