@@ -1,0 +1,31 @@
+# Secrets / local state - never bake these into the image
+.env
+.env.*
+# Gitignored as "contains secrets", and a strategy tweak should not cost an
+# image rebuild. Mount it at /app/config.yaml (Secret Manager) at run time -
+# every load_config() call site uses the default relative path.
+config.yaml
+secrets/
+*firebase-adminsdk*.json
+.toss_token.json
+.toss_token.json.lock
+KILL_SWITCH
+
+# Local caches / logs / debug output
+bars.db
+*.db
+*.sqlite3
+logs/
+firestore-debug.log
+firebase-debug.log
+
+# VCS / tooling / docs not needed at runtime
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+*.md

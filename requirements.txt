@@ -6,6 +6,7 @@ beautifulsoup4
 feedparser
 google-genai
 google-cloud-firestore
+google-cloud-storage  # Cloud Run only: syncs bars.db to/from GCS between ephemeral runs
 fastapi
 uvicorn
 # Only for backtesting and historical-bar refresh (src/data/, scripts/backtest.py) -
