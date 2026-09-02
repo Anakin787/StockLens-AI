@@ -468,7 +468,50 @@ def test_no_snapshots_at_all_is_not_reported_as_stale(client):
     assert data["snapshot_count"] == 0
 
 
-def test_allocation_by_bucket_reports_target_and_gap(client):
+@pytest.fixture
+def bucket_plan(service):
+    """Give the service an active strategy that actually has a bucket plan.
+
+    ``_bucket_allocation`` reads its targets from the loaded strategy, so with
+    the default (empty) TradingConfig the endpoint correctly answers "활성
+    전략에 버킷 계획이 없습니다" and returns no segments. Asserting on segment
+    order therefore needs a strategy registered, not just a portfolio.
+    """
+    import dataclasses
+
+    from src.config import TradingConfig
+
+    service.config = dataclasses.replace(
+        service.config,
+        trading=TradingConfig(
+            enabled=True,
+            strategies=["src.strategy.bucket_dca:BucketDcaStrategy"],
+            # Loading a strategy fails outright if the gate's ceiling sits
+            # below any instrument's target weight, and the highest in
+            # DEFAULT_UNIVERSE is QQQ at 0.60. Without this the load raises,
+            # the endpoint's catch-all turns it into "no bucket plan", and
+            # the test below reads as a missing feature rather than a
+            # misconfigured fixture.
+            #
+            # 0.65, not 0.60: config values arrive as floats and are compared
+            # against Decimal target weights, so an exactly-equal ceiling is
+            # read as exceeded (float 0.6 < Decimal("0.60")). config.yaml
+            # pads its overrides for the same reason.
+            limits={"max_position_weight": 0.65},
+        ),
+    )
+    return service
+
+
+def test_allocation_by_bucket_says_so_when_no_strategy_plans_buckets(client):
+    body = client.get("/api/allocation?by=bucket").json()
+
+    # A chart with nothing to plot must not look like a chart with zeroes.
+    assert body["segments"] == []
+    assert "버킷 계획" in body["error"]
+
+
+def test_allocation_by_bucket_reports_target_and_gap(bucket_plan, client):
     response = client.get("/api/allocation?by=bucket")
     assert response.status_code == 200
     body = response.json()
