@@ -707,3 +707,142 @@ python3 -m pytest -q
 
 - [x] 자동 빌드 (7장) · `m7-daily` Job (2장) · 스케줄 (3장) · 고정 IP/NAT (0-7)
 - [x] 시크릿·버킷·서비스계정 (0-4~0-6) · 대시보드 배포 + IAP (6장)
+
+---
+
+## 부록 A. 구조 — 무엇이 무엇에 걸려 있나
+
+네 개의 **사슬**로 되어 있다. 각각 독립적으로 끊기므로, 뭔가 안 될 때는 먼저
+**어느 사슬인지** 좁히는 것이 가장 빠르다.
+
+### 1. 배포 — 코드가 실행 가능한 물건이 되기까지
+
+```
+[내 PC] git push
+   │
+   ▼
+[GitHub] Anakin787/m7-terminal
+   │   웹훅 ← Cloud Build 앱이 설치돼 있어서 가능
+   ▼
+[Cloud Build] 트리거 m7-build-on-push        (리전: global)
+   │   · cloudbuild.yaml 을 읽어 빌드
+   │   · m7-build-sa 신원으로 실행
+   ▼
+[Artifact Registry] m7-terminal:<커밋해시> + :latest   (리전: asia-northeast3)
+   │
+   │   ✋ 자동은 여기서 끝. 반영은 사람이 결정한다 (7-3)
+   ▼
+[Cloud Run] m7-daily (Job) · m7-dashboard (Service)
+```
+
+셋의 역할이 다르다. **GitHub 연결**은 웹훅과 소스 읽기 권한, **트리거**는 언제 무엇으로
+빌드할지, **`cloudbuild.yaml`**은 어떻게 빌드할지. 하나만 빠져도 자동 빌드가 멈춘다.
+
+트리거는 `global`, 레지스트리는 `asia-northeast3`. **서로 달라도 정상이다** — 1세대 GitHub
+연결이 global에 살기 때문. 엉뚱한 리전으로 조회하면 아무것도 없는 것처럼 보인다.
+
+### 2. 인증 — 밖에서 대시보드로 들어오는 길
+
+```
+[브라우저]
+   │
+   ▼
+[IAP] ── 로그인 안 됨? ──► [OAuth 클라이언트] ──► accounts.google.com
+   │                        M7 Terminal IAP          │
+   │                        + 동의 화면(브랜딩)         │
+   │   ◄──────── :handleRedirect 로 돌아옴 ◄──────────┘
+   │
+   ├─ 이 사람 들어와도 되나? → IAM: iap.httpsResourceAccessor
+   │
+   ▼
+[IAP 서비스 에이전트] ── run.invoker ──► [Cloud Run m7-dashboard]
+```
+
+| 요소 | 답하는 질문 |
+|---|---|
+| OAuth 클라이언트 | 로그인 화면을 **어떻게** 띄우나 |
+| 동의 화면(브랜딩) | 로그인 화면에 **뭐라고** 표시하나 |
+| `iap.httpsResourceAccessor` | **누가** 들어올 수 있나 |
+| IAP 에이전트의 `run.invoker` | IAP가 **뒷단에 닿을** 수 있나 |
+
+502가 하루를 잡아먹은 건 첫 줄이 비어 있어서였다. 나머지 셋은 내내 맞아 있었다 — 사슬이라
+하나만 끊겨도 전체가 안 된다.
+
+대시보드 서비스 자체는 여전히 `--no-allow-unauthenticated`로 잠겨 있다. **IAP가 유일한
+통로다.**
+
+### 3. 신원 — 코드가 무엇을 만질 수 있나
+
+```
+[Cloud Scheduler] m7-daily-schedule
+   │  m7-scheduler-sa · run.invoker   ← Job을 부를 권한만
+   ▼
+[Cloud Run Job] m7-daily
+   │  m7-run-sa 신원으로 컨테이너 실행
+   ├──► Firestore        (datastore.user)
+   ├──► GCS bars-cache   (objectAdmin — 이 버킷에만)
+   └──► Secret Manager   (secretAccessor)
+```
+
+| 계정 | 할 수 있는 것 |
+|---|---|
+| `m7-build-sa` | 이미지 올리기, 로그 쓰기. 그게 전부 |
+| `m7-run-sa` | Firestore · GCS · Secret 접근 |
+| `m7-scheduler-sa` | Job 호출. 그게 전부 |
+
+**2번과 3번은 완전히 별개다.** 2번은 사람이 들어오는 문, 3번은 코드가 나가는 손이다. 같은
+IAM이지만 방향이 반대다.
+
+### 4. 네트워크 — 토스가 우리를 알아보는 길
+
+```
+[Cloud Run Job/Service]
+   │  --vpc-egress=all-traffic   ← 이게 없으면 아래를 안 탄다
+   ▼
+[VPC] default / m7-run-subnet
+   ▼
+[Cloud NAT] m7-nat ── m7-router
+   ▼
+고정 IP 34.22.70.110
+   ▼
+[토스 허용 IP 목록] ✅
+```
+
+고정 IP와 NAT가 있어도 **Job에 VPC 플래그가 없으면 소용없다.** 첫 실행이 403으로 죽은 것이
+정확히 이 이유였다 — 인프라는 다 있었는데 Job이 그리로 나가지 않았다.
+
+### 곁가지: 설정과 데이터
+
+```
+config.yaml ──► Secret Manager(m7-config) ──► /secrets/config.yaml
+                                                   ▲
+                             M7_CONFIG_PATH 가 위치를 알려준다
+```
+
+`/app/config.yaml`이 아닌 이유는 Cloud Run 시크릿 볼륨이 **마운트 지점이 속한 디렉터리를
+덮기** 때문이다. `/app`에 걸면 애플리케이션 코드가 가려진다.
+
+`bars.db`는 실행 전후로 GCS와 동기화하되 **대시보드에는 연결하지 않는다** (6-4).
+
+### 한 장으로
+
+```
+      코드 ──1──► 이미지 ──(수동)──► 실행 중인 컨테이너
+                                          │
+      사람 ──2──► IAP ────────────────────┤  (들어옴)
+                                          │
+                                          ├──3──► Firestore/GCS/Secret  (신원)
+                                          └──4──► NAT 고정 IP ──► 토스   (나감)
+```
+
+### 증상으로 사슬 좁히기
+
+| 증상 | 사슬 |
+|---|---|
+| 푸시했는데 이미지가 안 생김 | 1 — 트리거/웹훅 |
+| 이미지는 생겼는데 동작이 그대로 | 1 — 배포는 수동이다 (7-3) |
+| 대시보드가 502 / 로그인 화면이 안 뜸 | 2 — OAuth 클라이언트 |
+| 대시보드에서 403 | 2 — `iap.httpsResourceAccessor` |
+| Firestore·Secret 권한 오류 | 3 — `m7-run-sa` 역할 |
+| 스케줄이 Job을 못 부름 | 3 — `m7-scheduler-sa`의 `run.invoker` |
+| 토스 `403 edge-blocked` | 4 — VPC 플래그 또는 허용 IP |
