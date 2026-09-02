@@ -491,82 +491,74 @@ Notion/AI 키는 대시보드가 쓰지 않으므로 뺐다. 화면에서 뭔가
 
 ### 6-3. IAP로 잠그기 — 내 구글 계정만
 
-> 🔴 **여기서 막혀 있다 (2026-09-01).** IAP를 켜면 서비스가 **502**를 반환한다. 두 URL 모두이고,
-> 요청이 Cloud Run에 도달조차 하지 않는다 (서비스 로그에 기록이 없다) - IAP 프론트엔드가
-> 뒷단에 닿기 전에 끊는다. 아래는 모두 정상 확인됨:
->
-> - `iap-enabled: true`, `ingress: all`, `RoutesReady/ConfigurationsReady: True`
-> - `service-<번호>@gcp-sa-iap.iam.gserviceaccount.com` → `roles/run.invoker` (서비스 단위)
-> - `acc22ai@gmail.com` → `roles/iap.httpsResourceAccessor` (IAP 리소스 단위)
-> - 동의 화면(브랜딩) 생성 후 IAP 껐다 켜기까지 시도
-> - IAP 켜기 전에는 같은 서비스가 인증 없이 403, 토큰으로 200을 정상 반환했다
->
-> **원인 추정: OAuth 클라이언트가 없다.** 브랜딩만 만들어졌고 클라이언트는 생성되지 않은
-> 상태다. IAP가 로그인 화면을 띄울 클라이언트가 없으니 502가 난다.
->
-> **클라이언트는 생성됨.** ID (비밀이 아니다 - 브라우저 흐름에 그대로 노출되는 값):
-> `633981904995-hs1j2joo9c5p3plafijda813dii6pq3l.apps.googleusercontent.com`
-> **클라이언트 보안 비밀은 절대 여기 적지 않는다.**
->
-> **다음에 할 일**
-> 1. [클라이언트 페이지](https://console.cloud.google.com/auth/clients?project=quant-81f19)에서
->    위 클라이언트를 열고 **승인된 리디렉션 URI**에 이 값을 그대로 추가:
->
->    ```
->    https://iap.googleapis.com/v1/oauth/clientIds/633981904995-hs1j2joo9c5p3plafijda813dii6pq3l.apps.googleusercontent.com:handleRedirect
->    ```
->
-> 2. [IAP 페이지](https://console.cloud.google.com/security/iap?project=quant-81f19)에서
->    `m7-dashboard` 행의 ⋮ 메뉴로 그 클라이언트를 연결. 메뉴가 없으면 IAP를 껐다 켜서
->    새 클라이언트를 집게 한다:
->
->    ```bash
->    gcloud beta run services update m7-dashboard --region=asia-northeast3 --no-iap
->    gcloud beta run services update m7-dashboard --region=asia-northeast3 --iap
->    ```
->
-> 3. 확인 - 502가 아니라 **302**(구글 로그인으로 리다이렉트)가 나와야 성공이다.
->    브라우저는 로그인된 창에서 통과해버리므로 **시크릿 창**에서 볼 것.
->
->    ```bash
->    curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" https://m7-dashboard-ofhlnvd7jq-du.a.run.app
->    ```
->
-> **CLI로는 더 진단할 수 없다.** IAP OAuth 관리 API가 2026-03-19에 영구 종료됐고,
-> `gcloud iap oauth-brands list`는 "Project must belong to an organization"으로 거부된다.
->
-> 계속 막히면 대안은 둘이다 - 외부 HTTPS 로드밸런서 + IAP (확실하지만 LB 기본요금 월 $18
-> 수준), 또는 대시보드 앱에 자체 인증을 한 겹 추가 (비용 0, 코드 필요).
+> ✅ **완료 (2026-09-02).** 인증 없이 접근하면 구글 로그인으로 302 리다이렉트되고,
+> `acc22ai@gmail.com`만 통과한다. 코드는 한 줄도 건드리지 않았다.
 
-**코드 수정이 필요 없는 방식.** 구글 로그인 한 번이면 폰 브라우저에서도 그대로 열린다.
+**핵심은 커스텀 OAuth를 쓰는 것이다.** 기본값인 *Google 관리 OAuth*는 이 프로젝트에서 동작하지
+않는다 - 클라이언트를 Google이 자동 발급하는데 그 발급이 **조직 소속 프로젝트를 전제로 한다**.
+조직 없는 개인 프로젝트라 발급이 안 되고, 그 결과가 모든 요청에 대한 **502**다. 502 본문을
+직접 읽어야 이유가 나온다(브라우저는 감춘다):
+
+```bash
+curl -s https://m7-dashboard-ofhlnvd7jq-du.a.run.app
+# Empty Google Account OAuth client ID(s)/secret(s).
+```
+
+**1) OAuth 클라이언트 만들기** —
+[클라이언트 페이지](https://console.cloud.google.com/auth/clients?project=quant-81f19) >
+클라이언트 만들기 > **웹 애플리케이션** > 이름 `M7 Terminal IAP`.
+동의 화면(브랜딩)이 없으면 먼저 만들라고 안내한다. 대상은 **외부**, 테스트 사용자에 본인 계정.
+게시(Publish)는 하지 않는다 - 본인만 쓰는 화면에 Google 검수를 붙일 이유가 없다.
+
+**2) 리디렉션 URI 추가** — 만든 클라이언트를 다시 열어 **승인된 리디렉션 URI**에:
+
+```
+https://iap.googleapis.com/v1/oauth/clientIds/633981904995-hs1j2joo9c5p3plafijda813dii6pq3l.apps.googleusercontent.com:handleRedirect
+```
+
+클라이언트 ID 전체 뒤에 `:handleRedirect`를 붙인 형태다. **JavaScript 원본은 비워둔다** -
+IAP는 서버 측 리다이렉트만 쓴다. 클라이언트 ID는 비밀이 아니지만(로그인할 때마다 브라우저를
+지나간다) **보안 비밀은 어디에도 적지 않는다.**
+
+**3) IAP에 그 클라이언트를 물린다** —
+[IAP 페이지](https://console.cloud.google.com/security/iap?project=quant-81f19)에서
+**'모든 웹 서비스' 행의 설정**을 연다. 서비스 행의 ⋮ 메뉴가 아니라 **상위 행**이다.
+여기서 한참 헤맸다.
+
+> OAuth 구성 > **커스텀 OAuth** 선택 > 클라이언트 ID와 보안 비밀 입력 > 저장.
+> 보안 비밀은 **저장 후 다시 조회할 수 없으니** 먼저 따로 보관해둘 것.
+
+**4) 접근 권한** — 코드가 아니라 IAM으로 정한다.
 
 ☁️ **아무 셸이나**
 
 ```bash
-gcloud services enable iap.googleapis.com
+gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+  --service=m7-dashboard --region=$REGION \
+  --member="user:someone@example.com" --role="roles/iap.httpsResourceAccessor"
+```
 
-# 이 서비스에 IAP를 켠다
-gcloud run services update m7-dashboard --region=$REGION --iap
+IAP 서비스 에이전트가 뒷단을 호출할 수 있어야 한다(`--iap`를 켤 때 자동으로 붙지만 확인할 것):
 
-# 내 계정만 통과시킨다
+```bash
 gcloud run services add-iam-policy-binding m7-dashboard --region=$REGION \
-  --member="user:jujeong@ncurity.com" \
+  --member="serviceAccount:service-<프로젝트번호>@gcp-sa-iap.iam.gserviceaccount.com" \
   --role="roles/run.invoker"
 ```
 
-> IAP 최초 활성화 때 GCP 콘솔에서 **OAuth 동의 화면**을 한 번 구성하라고 요구할 수 있다.
-> 또한 프로젝트 설정에 따라 Cloud Run 직접 IAP 대신 **외부 HTTPS 로드밸런서 + IAP** 경로를
-> 요구하는 경우가 있다. 그때는 콘솔의 IAP 페이지 안내를 따르는 편이 빠르다.
-> **이 부분은 실제로 실행해 검증하지 않았으므로, 진행하면서 실제 절차로 고쳐 둘 것.**
-
-배포 후 URL 확인:
+**5) 확인** — **302**가 정답이다. 200이면 잠기지 않은 것이고, 502면 3)이 빠진 것이다.
 
 ```bash
-gcloud run services describe m7-dashboard --region=$REGION --format='value(status.url)'
+curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" \
+  https://m7-dashboard-ofhlnvd7jq-du.a.run.app
 ```
 
-**접속 확인은 시크릿 창에서 한다.** 로그인된 창에서는 통과해서, 잠긴 건지 아닌지 구분이 안 된다.
-시크릿 창에서 구글 로그인 화면이 뜨면 정상이고, 대시보드가 바로 보이면 잠기지 않은 것이다.
+브라우저로 볼 때는 **시크릿 창**에서 한다. 로그인된 창은 그냥 통과해서 잠금 여부를 구분할 수 없다.
+
+> **CLI만으로는 끝낼 수 없다.** `gcloud iap web enable`의 `--oauth2-client-id/-secret`은
+> `app-engine`과 `backend-services`만 지원하고 `cloud-run`은 받지 않는다.
+> `gcloud iap settings get --resource-type=cloud-run`은 리소스 파싱조차 못 한다.
+> IAP OAuth 관리 API는 2026-03-19에 종료됐다. 3)은 콘솔에서만 가능하다.
 
 ### 6-4. 대시보드에는 bars.db를 공유하지 않는다
 
@@ -708,11 +700,10 @@ python3 -m pytest -q
 
 ## 남은 일
 
-- [ ] **IAP 502 해결** — 6-3에 상태와 다음 단계. OAuth 클라이언트 생성부터
-- [ ] **`m7-trade` Job 생성** — PAPER 모드. 스케줄 연결은 IAP가 풀린 뒤
+- [ ] **`m7-trade` Job 생성** — PAPER 모드. 2장의 Job 정의를 그대로 쓰되 `--args=python,trade.py`
 - [ ] **실패 알림** — Job 실패가 조용히 묻히지 않도록 로그 기반 알림 설정
 
 ### 완료
 
 - [x] 자동 빌드 (7장) · `m7-daily` Job (2장) · 스케줄 (3장) · 고정 IP/NAT (0-7)
-- [x] 시크릿·버킷·서비스계정 (0-4~0-6) · 대시보드 배포 (6-2)
+- [x] 시크릿·버킷·서비스계정 (0-4~0-6) · 대시보드 배포 + IAP (6장)
